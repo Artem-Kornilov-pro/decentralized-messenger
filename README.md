@@ -1,6 +1,6 @@
 # Decentralized Messenger
 
-A decentralized messenger with cryptographic message verification — no blockchain required.
+A decentralized messenger with cryptographic message verification — no blockchain required. Written in **Go**.
 
 ## Concept
 
@@ -32,27 +32,31 @@ Instead of a traditional blockchain, the system uses a **three-layer hybrid secu
 ## Architecture
 
 ```
-src/decentralized_messenger/
-├── crypto/          # Ed25519 key management, signing, verification
-├── log/             # Append-only message log with chained hashes
-├── merkle/          # Merkle tree construction and snapshot management
-├── storage/         # ScyllaDB adapter for logs and snapshots
-├── cache/           # Redis adapter for public keys and Merkle roots
-├── broker/          # RabbitMQ adapter for inter-node log sync
-├── api/             # HTTP/WebSocket API (aiohttp)
-└── models/          # Pydantic data models
+cmd/
+└── messenger/        # Node entrypoint (HTTP server + -demo mode)
+internal/
+├── models/           # Core types: SignedMessage, LogEntry, MerkleSnapshot
+├── crypto/           # Ed25519 key management, signing, verification
+├── merkle/           # Merkle root + inclusion proofs
+├── chatlog/          # Append-only log: chaining, snapshots, verify, sync
+├── storage/          # Persistence port + in-memory implementation
+├── service/          # High-level messenger façade
+└── api/              # HTTP/JSON API (net/http)
 ```
+
+The domain layer (`models`, `crypto`, `merkle`, `chatlog`) has **zero external
+dependencies** — only the Go standard library. Infrastructure adapters
+(ScyllaDB, Redis, RabbitMQ) plug in behind the `storage.Storage` port.
 
 ## Tech Stack
 
 | Component | Technology |
 |-----------|------------|
-| Core logic & crypto | Python 3.12 |
-| Message log storage | ScyllaDB |
+| Core logic & crypto | Go 1.23 (stdlib `crypto/ed25519`, `crypto/sha256`) |
+| Message log storage | ScyllaDB (immutable critical data) |
 | Key & root cache | Redis |
 | Node synchronization | RabbitMQ |
-| Data validation | Pydantic v2 |
-| HTTP / WebSocket | aiohttp |
+| HTTP API | `net/http` |
 | Monitoring | Grafana + Loki |
 | Containerization | Docker |
 
@@ -60,45 +64,60 @@ src/decentralized_messenger/
 
 ### Prerequisites
 
-- Python 3.12+
-- Docker & Docker Compose
+- Go 1.23+
+- Docker & Docker Compose (for the full infrastructure stack)
 
-### Install (development)
+### Build & test
 
 ```bash
 git clone https://github.com/Artem-Kornilov-pro/decentralized-messenger.git
 cd decentralized-messenger
 
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-
-pip install -e ".[dev]"
+go build ./...
+go test ./...
 ```
 
-### Run tests
+### Run the demo
+
+A self-contained demonstration of signing, hash-chaining, and verification:
 
 ```bash
-pytest
+go run ./cmd/messenger -demo
 ```
 
-### Run with Docker
+### Run the HTTP node
+
+```bash
+go run ./cmd/messenger -addr :8080
+```
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/healthz` | Liveness probe |
+| `POST` | `/keys` | Generate an Ed25519 key pair (dev only) |
+| `POST` | `/chats/{chatID}/messages` | Sign and append a message |
+| `GET`  | `/chats/{chatID}/verify` | Verify full chat integrity |
+| `GET`  | `/chats/{chatID}/sync` | Get the catch-up bundle for a new participant |
+
+Example:
+
+```bash
+# mint a key pair (dev convenience)
+curl -s -X POST localhost:8080/keys > keys.json
+
+# send a message
+curl -X POST localhost:8080/chats/demo/messages \
+  -H 'Content-Type: application/json' \
+  -d '{"sender_id":"alice","public_key":..., "private_key":..., "text":"hello"}'
+
+# verify the whole chat
+curl localhost:8080/chats/demo/verify
+```
+
+### Run the infrastructure stack
 
 ```bash
 docker compose up
-```
-
-## Project Structure
-
-```
-decentralized-messenger/
-├── src/
-│   └── decentralized_messenger/   # Main package
-├── tests/                         # Test suite
-├── docker/                        # Dockerfiles per service
-├── docs/                          # Extended documentation
-├── pyproject.toml                 # Project metadata & dependencies
-├── docker-compose.yml             # Full stack for local development
-└── README.md
 ```
 
 ## Security Model
@@ -108,6 +127,8 @@ Every message in the system satisfies three cryptographic properties:
 - **Authenticity** — Ed25519 signature proves the message came from the claimed sender
 - **Integrity** — the chained hash makes any modification of a past message detectable
 - **Completeness** — Merkle root snapshots let any party prove no messages are missing
+
+See [docs/architecture.md](docs/architecture.md) for diagrams and data flow.
 
 ## License
 

@@ -37,12 +37,12 @@
 ## Data Flow
 
 ```
-Client ──► API (aiohttp)
+Client ──► API (net/http)
              │
-             ├──► crypto.keys.sign()         # Ed25519 signature
-             ├──► log.append()               # append-only log entry
-             ├──► merkle.update()            # update Merkle tree
-             ├──► storage (ScyllaDB)         # persist log + snapshots
+             ├──► crypto.SignMessage()       # Ed25519 signature
+             ├──► chatlog.Append()           # append-only log entry (chained hash)
+             ├──► merkle.Root()              # update Merkle tree (every 100 msgs)
+             ├──► storage.Storage            # persist log + snapshots (ScyllaDB)
              ├──► cache (Redis)              # cache Merkle root
              └──► broker (RabbitMQ)          # notify other nodes
 ```

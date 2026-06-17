@@ -1,33 +1,24 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
+# Binaries
+*.exe
+*.exe~
+*.dll
 *.so
-*.egg
-*.egg-info/
-dist/
-build/
-.eggs/
-.Python
-pip-wheel-metadata/
+*.dylib
+/bin/
+/messenger
+messenger
 
-# Virtual environments
-.venv/
-venv/
-env/
-ENV/
+# Test & coverage
+*.test
+*.out
+coverage.txt
 
-# Testing & coverage
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
+# Go workspace
+go.work
+go.work.sum
 
-# Type checking
-.mypy_cache/
-
-# Linting
-.ruff_cache/
+# Vendoring
+/vendor/
 
 # IDE
 .vscode/
@@ -39,7 +30,7 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# Environment variables
+# Environment
 .env
 .env.local
 .env.*.local
@@ -47,10 +38,8 @@ Thumbs.db
 # Docker
 docker-compose.override.yml
 
-# Logs
+# Logs & local data
 *.log
 logs/
-
-# Data & snapshots (local dev)
 data/
 snapshots/
