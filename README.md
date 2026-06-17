@@ -39,20 +39,29 @@ internal/
 ├── crypto/           # Ed25519 key management, signing, verification
 ├── merkle/           # Merkle root + inclusion proofs
 ├── chatlog/          # Append-only log: chaining, snapshots, verify, sync
-├── storage/          # Persistence port + in-memory implementation
+├── storage/          # Persistence port: in-memory + ScyllaDB adapters
+├── cache/            # Cache port: in-memory + Redis adapters
+├── broker/           # Event port: in-memory + RabbitMQ adapters
 ├── service/          # High-level messenger façade
 └── api/              # HTTP/JSON API (net/http)
 ```
 
-The domain layer (`models`, `crypto`, `merkle`, `chatlog`) has **zero external
-dependencies** — only the Go standard library. Infrastructure adapters
-(ScyllaDB, Redis, RabbitMQ) plug in behind the `storage.Storage` port.
+The domain layer (`models`, `crypto`, `merkle`, `chatlog`) depends only on the
+Go standard library. Infrastructure is hidden behind three ports —
+`storage.Storage`, `cache.Cache`, `broker.Broker` — each with a zero-dependency
+in-memory implementation (the default) and a production adapter:
+
+| Port | In-memory default | Production adapter |
+|------|-------------------|--------------------|
+| `storage.Storage` | `storage.InMemoryStorage` | ScyllaDB (`gocql`) |
+| `cache.Cache` | `cache.InMemory` | Redis (`go-redis`) |
+| `broker.Broker` | `broker.InMemory` | RabbitMQ (`amqp091`) |
 
 ## Tech Stack
 
 | Component | Technology |
 |-----------|------------|
-| Core logic & crypto | Go 1.23 (stdlib `crypto/ed25519`, `crypto/sha256`) |
+| Core logic & crypto | Go 1.24 (stdlib `crypto/ed25519`, `crypto/sha256`) |
 | Message log storage | ScyllaDB (immutable critical data) |
 | Key & root cache | Redis |
 | Node synchronization | RabbitMQ |
@@ -64,7 +73,7 @@ dependencies** — only the Go standard library. Infrastructure adapters
 
 ### Prerequisites
 
-- Go 1.23+
+- Go 1.24+
 - Docker & Docker Compose (for the full infrastructure stack)
 
 ### Build & test
@@ -114,11 +123,31 @@ curl -X POST localhost:8080/chats/demo/messages \
 curl localhost:8080/chats/demo/verify
 ```
 
+### Configuration
+
+The node picks an adapter per port based on environment variables; unset means
+the in-memory default. This lets the same binary run standalone or against the
+full stack.
+
+| Variable | Effect |
+|----------|--------|
+| `SCYLLA_HOSTS` | Comma-separated ScyllaDB hosts → ScyllaDB storage |
+| `SCYLLA_KEYSPACE` | Keyspace name (default `messenger`) |
+| `REDIS_ADDR` | `host:port` → Redis cache |
+| `REDIS_PASSWORD` | Redis auth (optional) |
+| `RABBITMQ_URL` | `amqp://…` → RabbitMQ broker |
+
+Before first use, apply the ScyllaDB schema (exported as `storage.Schema`) to
+your keyspace — it creates the immutable `log_entries` and `snapshots` tables.
+
 ### Run the infrastructure stack
 
 ```bash
 docker compose up
 ```
+
+The `messenger` service is pre-wired to the ScyllaDB, Redis, and RabbitMQ
+containers via the environment variables above.
 
 ## Security Model
 

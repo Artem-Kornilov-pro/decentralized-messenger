@@ -5,6 +5,11 @@ services:
       dockerfile: docker/Dockerfile
     ports:
       - "8080:8080"
+    environment:
+      SCYLLA_HOSTS: scylladb
+      SCYLLA_KEYSPACE: messenger
+      REDIS_ADDR: redis:6379
+      RABBITMQ_URL: amqp://messenger:messenger@rabbitmq:5672/
     depends_on:
       - scylladb
       - redis

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/broker"
+	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/cache"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/crypto"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/merkle"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/models"
@@ -19,15 +21,32 @@ import (
 var ErrInvalidSignature = errors.New("chatlog: invalid message signature")
 
 // Log appends signed messages to per-chat append-only logs backed by a
-// storage.Storage, maintaining the hash chain and Merkle snapshots.
+// storage.Storage, maintaining the hash chain and Merkle snapshots. It caches
+// the latest Merkle root and publishes log events to a broker.
 type Log struct {
-	store storage.Storage
-	locks sync.Map // chatID -> *sync.Mutex
+	store  storage.Storage
+	cache  cache.Cache
+	broker broker.Broker
+	locks  sync.Map // chatID -> *sync.Mutex
 }
 
-// New returns a Log backed by the given storage.
-func New(store storage.Storage) *Log {
-	return &Log{store: store}
+// Option configures a Log.
+type Option func(*Log)
+
+// WithCache wires a cache for Merkle roots and public keys.
+func WithCache(c cache.Cache) Option { return func(l *Log) { l.cache = c } }
+
+// WithBroker wires a broker for log-event propagation.
+func WithBroker(b broker.Broker) Option { return func(l *Log) { l.broker = b } }
+
+// New returns a Log backed by the given storage. By default it uses no-op cache
+// and broker; pass WithCache / WithBroker to attach real adapters.
+func New(store storage.Storage, opts ...Option) *Log {
+	l := &Log{store: store, cache: cache.Noop{}, broker: broker.Noop{}}
+	for _, opt := range opts {
+		opt(l)
+	}
+	return l
 }
 
 func (l *Log) chatLock(chatID string) *sync.Mutex {
@@ -63,6 +82,13 @@ func (l *Log) Append(msg models.SignedMessage) (models.LogEntry, error) {
 		return models.LogEntry{}, fmt.Errorf("append: %w", err)
 	}
 
+	_ = l.broker.Publish(broker.Event{
+		Kind:      broker.EntryAppended,
+		ChatID:    msg.ChatID,
+		Sequence:  entry.Sequence,
+		EntryHash: entry.EntryHash,
+	})
+
 	if (entry.Sequence+1)%models.SnapshotInterval == 0 {
 		if err := l.snapshot(msg.ChatID, entry); err != nil {
 			return models.LogEntry{}, fmt.Errorf("snapshot: %w", err)
@@ -92,15 +118,27 @@ func (l *Log) snapshot(chatID string, tip models.LogEntry) error {
 		leaves[i] = e.EntryHash
 	}
 
-	return l.store.SaveSnapshot(models.MerkleSnapshot{
+	root := merkle.Root(leaves)
+	if err := l.store.SaveSnapshot(models.MerkleSnapshot{
 		ChatID:        chatID,
 		SnapshotIndex: index,
 		FromSequence:  from,
 		ToSequence:    tip.Sequence,
-		MerkleRoot:    merkle.Root(leaves),
+		MerkleRoot:    root,
 		LastEntryHash: tip.EntryHash,
 		CreatedAt:     time.Now().UTC(),
+	}); err != nil {
+		return err
+	}
+
+	l.cache.SetMerkleRoot(chatID, root)
+	_ = l.broker.Publish(broker.Event{
+		Kind:      broker.SnapshotCreated,
+		ChatID:    chatID,
+		Sequence:  tip.Sequence,
+		EntryHash: tip.EntryHash,
 	})
+	return nil
 }
 
 // VerifyResult reports the outcome of a full-chain integrity check.

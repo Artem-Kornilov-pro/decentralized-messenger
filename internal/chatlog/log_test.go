@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/broker"
+	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/cache"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/crypto"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/models"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/storage"
@@ -98,6 +100,39 @@ func TestSnapshotCreatedAtInterval(t *testing.T) {
 	}
 	if snap.ToSequence != models.SnapshotInterval-1 || snap.MerkleRoot == "" {
 		t.Fatalf("unexpected snapshot: %+v", snap)
+	}
+}
+
+func TestAppendPublishesEventAndCachesRoot(t *testing.T) {
+	store := storage.NewInMemoryStorage()
+	c := cache.NewInMemory()
+	b := broker.NewInMemory()
+	sub := b.Subscribe()
+	lg := New(store, WithCache(c), WithBroker(b))
+	priv, pub, _ := crypto.GenerateKeyPair()
+
+	entry, err := lg.Append(newSignedMessage(t, "c1", "hi", priv, pub))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case evt := <-sub:
+		if evt.Kind != broker.EntryAppended || evt.EntryHash != entry.EntryHash {
+			t.Fatalf("unexpected event %+v", evt)
+		}
+	default:
+		t.Fatal("expected an EntryAppended event")
+	}
+
+	// Fill the rest of the window to trigger a snapshot, then check the cache.
+	for i := 1; i < models.SnapshotInterval; i++ {
+		if _, err := lg.Append(newSignedMessage(t, "c1", string(rune(i)), priv, pub)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if root, ok := c.GetMerkleRoot("c1"); !ok || root == "" {
+		t.Fatal("expected Merkle root cached after snapshot")
 	}
 }
 
