@@ -94,6 +94,17 @@ func (m *Messenger) appendSigned(chatID string, sender Sender, content []byte, c
 	return m.log.Append(msg)
 }
 
+// History returns up to limit messages of a chat starting at sequence from.
+// Content stays encrypted; clients decrypt with DecryptContent.
+func (m *Messenger) History(chatID string, from uint64, limit int) ([]models.LogEntry, error) {
+	return m.log.History(chatID, from, limit)
+}
+
+// Message returns a single message by its sequence number.
+func (m *Messenger) Message(chatID string, sequence uint64) (models.LogEntry, error) {
+	return m.log.Entry(chatID, sequence)
+}
+
 // Verify checks the full integrity of a chat's history.
 func (m *Messenger) Verify(chatID string) (chatlog.VerifyResult, error) {
 	return m.log.Verify(chatID)

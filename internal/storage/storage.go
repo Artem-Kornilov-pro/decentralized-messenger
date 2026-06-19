@@ -22,6 +22,8 @@ type Storage interface {
 	AppendEntry(chatID string, entry models.LogEntry) error
 	// LastEntry returns the tip of a chat's log, or ErrNotFound if empty.
 	LastEntry(chatID string) (models.LogEntry, error)
+	// Entry returns a single entry by sequence, or ErrNotFound.
+	Entry(chatID string, sequence uint64) (models.LogEntry, error)
 	// EntriesSince returns entries with sequence >= fromSequence, in order.
 	EntriesSince(chatID string, fromSequence uint64) ([]models.LogEntry, error)
 	// SaveSnapshot persists a Merkle snapshot.
@@ -69,6 +71,17 @@ func (s *InMemoryStorage) LastEntry(chatID string) (models.LogEntry, error) {
 		return models.LogEntry{}, ErrNotFound
 	}
 	return existing[len(existing)-1], nil
+}
+
+func (s *InMemoryStorage) Entry(chatID string, sequence uint64) (models.LogEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	existing := s.entries[chatID]
+	if sequence >= uint64(len(existing)) {
+		return models.LogEntry{}, ErrNotFound
+	}
+	return existing[sequence], nil
 }
 
 func (s *InMemoryStorage) EntriesSince(chatID string, fromSequence uint64) ([]models.LogEntry, error) {

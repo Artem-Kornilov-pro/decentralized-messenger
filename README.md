@@ -118,6 +118,8 @@ go run ./cmd/messenger -addr :8080
 | `POST` | `/keys` | Generate an Ed25519 key pair (dev only) |
 | `POST` | `/keys/content` | Generate a symmetric content key (dev only) |
 | `POST` | `/chats/{chatID}/messages` | Sign and append a text message |
+| `GET`  | `/chats/{chatID}/messages` | List history (`?from=&limit=`, paginated) |
+| `GET`  | `/chats/{chatID}/messages/{sequence}` | Fetch a single message by sequence |
 | `POST` | `/chats/{chatID}/photos` | Encrypt, sign, and append a photo |
 | `GET`  | `/chats/{chatID}/verify` | Verify full chat integrity |
 | `GET`  | `/chats/{chatID}/sync` | Get the catch-up bundle for a new participant |

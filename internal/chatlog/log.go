@@ -141,6 +141,24 @@ func (l *Log) snapshot(chatID string, tip models.LogEntry) error {
 	return nil
 }
 
+// History returns up to limit entries starting at sequence from, in order. A
+// limit <= 0 returns all entries from from onward.
+func (l *Log) History(chatID string, from uint64, limit int) ([]models.LogEntry, error) {
+	entries, err := l.store.EntriesSince(chatID, from)
+	if err != nil {
+		return nil, err
+	}
+	if limit > 0 && len(entries) > limit {
+		entries = entries[:limit]
+	}
+	return entries, nil
+}
+
+// Entry returns a single log entry by its sequence number.
+func (l *Log) Entry(chatID string, sequence uint64) (models.LogEntry, error) {
+	return l.store.Entry(chatID, sequence)
+}
+
 // VerifyResult reports the outcome of a full-chain integrity check.
 type VerifyResult struct {
 	Valid   bool

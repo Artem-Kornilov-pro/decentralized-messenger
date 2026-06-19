@@ -3,10 +3,20 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/crypto"
+	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/models"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/service"
+	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/storage"
+)
+
+// Pagination defaults for the history endpoint.
+const (
+	defaultHistoryLimit = 50
+	maxHistoryLimit     = 200
 )
 
 // Server wires the Messenger service to HTTP handlers.
@@ -26,6 +36,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /keys", s.HandleGenerateKeys)
 	mux.HandleFunc("POST /keys/content", s.handleGenerateContentKey)
 	mux.HandleFunc("POST /chats/{chatID}/messages", s.handleSend)
+	mux.HandleFunc("GET /chats/{chatID}/messages", s.handleHistory)
+	mux.HandleFunc("GET /chats/{chatID}/messages/{sequence}", s.handleMessage)
 	mux.HandleFunc("POST /chats/{chatID}/photos", s.handleSendPhoto)
 	mux.HandleFunc("GET /chats/{chatID}/verify", s.handleVerify)
 	mux.HandleFunc("GET /chats/{chatID}/sync", s.handleSync)
@@ -96,6 +108,75 @@ func (s *Server) handleSendPhoto(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, entry)
+}
+
+// historyResponse is the paginated history payload. NextFrom is the sequence to
+// pass as ?from= on the next request, or null when the end has been reached.
+type historyResponse struct {
+	Messages []models.LogEntry `json:"messages"`
+	NextFrom *uint64           `json:"next_from"`
+}
+
+func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	chatID := r.PathValue("chatID")
+
+	from, err := parseUintQuery(r, "from", 0)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid 'from' parameter")
+		return
+	}
+	limit, err := parseUintQuery(r, "limit", defaultHistoryLimit)
+	if err != nil || limit == 0 {
+		writeError(w, http.StatusBadRequest, "invalid 'limit' parameter")
+		return
+	}
+	if limit > maxHistoryLimit {
+		limit = maxHistoryLimit
+	}
+
+	entries, err := s.svc.History(chatID, from, int(limit))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	resp := historyResponse{Messages: entries}
+	// A full page implies there may be more; advance the cursor past the last.
+	if uint64(len(entries)) == limit && len(entries) > 0 {
+		next := entries[len(entries)-1].Sequence + 1
+		resp.NextFrom = &next
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
+	chatID := r.PathValue("chatID")
+	sequence, err := strconv.ParseUint(r.PathValue("sequence"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "sequence must be a non-negative integer")
+		return
+	}
+
+	entry, err := s.svc.Message(chatID, sequence)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "message not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, entry)
+}
+
+// parseUintQuery reads an unsigned integer query parameter, returning fallback
+// when the parameter is absent.
+func parseUintQuery(r *http.Request, key string, fallback uint64) (uint64, error) {
+	raw := r.URL.Query().Get(key)
+	if raw == "" {
+		return fallback, nil
+	}
+	return strconv.ParseUint(raw, 10, 64)
 }
 
 func (s *Server) handleGenerateContentKey(w http.ResponseWriter, _ *http.Request) {
