@@ -104,7 +104,9 @@ go run ./cmd/messenger -addr :8080
 |--------|------|-------------|
 | `GET`  | `/healthz` | Liveness probe |
 | `POST` | `/keys` | Generate an Ed25519 key pair (dev only) |
-| `POST` | `/chats/{chatID}/messages` | Sign and append a message |
+| `POST` | `/keys/content` | Generate a symmetric content key (dev only) |
+| `POST` | `/chats/{chatID}/messages` | Sign and append a text message |
+| `POST` | `/chats/{chatID}/photos` | Encrypt, sign, and append a photo |
 | `GET`  | `/chats/{chatID}/verify` | Verify full chat integrity |
 | `GET`  | `/chats/{chatID}/sync` | Get the catch-up bundle for a new participant |
 
@@ -156,6 +158,24 @@ Every message in the system satisfies three cryptographic properties:
 - **Authenticity** — Ed25519 signature proves the message came from the claimed sender
 - **Integrity** — the chained hash makes any modification of a past message detectable
 - **Completeness** — Merkle root snapshots let any party prove no messages are missing
+
+### Encrypted content (text & photos)
+
+Message bodies and photo attachments can be encrypted with a per-chat symmetric
+key (**AES-256-GCM**) before they ever reach the server:
+
+- The client encrypts the content and signs the **ciphertext**. The server
+  stores and verifies only ciphertext — it never sees the content key, so it
+  cannot read messages or photos.
+- A node can still verify authorship and integrity (the signature and hash
+  chain cover the ciphertext), keeping the security model intact.
+- Only clients holding the chat's content key can decrypt. GCM authentication
+  also detects any tampering with the stored bytes.
+
+Photos are sent via `POST /chats/{chatID}/photos` with the encrypted bytes,
+their MIME type, and an optional filename (plaintext capped at 10 MiB). The
+message carries `content_type`, `filename`, and an `encrypted` flag, all bound
+into the signature.
 
 See [docs/architecture.md](docs/architecture.md) for diagrams and data flow.
 

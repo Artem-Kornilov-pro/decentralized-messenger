@@ -24,7 +24,9 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("POST /keys", s.HandleGenerateKeys)
+	mux.HandleFunc("POST /keys/content", s.handleGenerateContentKey)
 	mux.HandleFunc("POST /chats/{chatID}/messages", s.handleSend)
+	mux.HandleFunc("POST /chats/{chatID}/photos", s.handleSendPhoto)
 	mux.HandleFunc("GET /chats/{chatID}/verify", s.handleVerify)
 	mux.HandleFunc("GET /chats/{chatID}/sync", s.handleSync)
 	return mux
@@ -59,6 +61,50 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, entry)
+}
+
+type sendPhotoRequest struct {
+	SenderID    string `json:"sender_id"`
+	PublicKey   []byte `json:"public_key"`
+	PrivateKey  []byte `json:"private_key"`
+	ContentKey  []byte `json:"content_key"`
+	Photo       []byte `json:"photo"`
+	ContentType string `json:"content_type"`
+	Filename    string `json:"filename"`
+}
+
+func (s *Server) handleSendPhoto(w http.ResponseWriter, r *http.Request) {
+	chatID := r.PathValue("chatID")
+	var req sendPhotoRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.SenderID == "" || len(req.PublicKey) == 0 || len(req.PrivateKey) == 0 {
+		writeError(w, http.StatusBadRequest, "sender_id, public_key and private_key are required")
+		return
+	}
+	if len(req.ContentKey) == 0 || len(req.Photo) == 0 {
+		writeError(w, http.StatusBadRequest, "content_key and photo are required")
+		return
+	}
+
+	sender := service.Sender{ID: req.SenderID, PublicKey: req.PublicKey, PrivateKey: req.PrivateKey}
+	entry, err := s.svc.SendPhoto(chatID, sender, req.ContentKey, req.Photo, req.ContentType, req.Filename)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, entry)
+}
+
+func (s *Server) handleGenerateContentKey(w http.ResponseWriter, _ *http.Request) {
+	key, err := crypto.NewContentKey()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string][]byte{"content_key": key})
 }
 
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {

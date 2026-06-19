@@ -16,18 +16,31 @@ const GenesisHash = "00000000000000000000000000000000000000000000000000000000000
 // SnapshotInterval is the number of messages between Merkle snapshots.
 const SnapshotInterval = 100
 
+// Content types carried by a message. Text is the default; photos use their
+// concrete image MIME type.
+const (
+	ContentTypeText = "text/plain"
+)
+
 // SignedMessage is a chat message authenticated by the sender's Ed25519 key.
+//
+// Content holds the message body or attachment bytes. When Encrypted is true it
+// is AES-256-GCM ciphertext (the server stores and signs only ciphertext; only
+// clients holding the chat's content key can decrypt it).
 //
 // PublicKey and Signature are NOT part of the signed payload; the payload is
 // the deterministic content produced by SigningPayload.
 type SignedMessage struct {
-	MessageID string    `json:"message_id"`
-	ChatID    string    `json:"chat_id"`
-	SenderID  string    `json:"sender_id"`
-	Content   []byte    `json:"content"`
-	Timestamp time.Time `json:"timestamp"`
-	PublicKey []byte    `json:"public_key"`
-	Signature []byte    `json:"signature"`
+	MessageID   string    `json:"message_id"`
+	ChatID      string    `json:"chat_id"`
+	SenderID    string    `json:"sender_id"`
+	Content     []byte    `json:"content"`
+	ContentType string    `json:"content_type"`
+	Filename    string    `json:"filename,omitempty"`
+	Encrypted   bool      `json:"encrypted"`
+	Timestamp   time.Time `json:"timestamp"`
+	PublicKey   []byte    `json:"public_key"`
+	Signature   []byte    `json:"signature"`
 }
 
 // SigningPayload returns the canonical bytes that are signed and verified.
@@ -36,13 +49,20 @@ type SignedMessage struct {
 // whitespace) and binds the sender's public key in, so a message can never be
 // re-attributed to a different author.
 func (m SignedMessage) SigningPayload() []byte {
+	encrypted := "false"
+	if m.Encrypted {
+		encrypted = "true"
+	}
 	payload := map[string]string{
-		"message_id": m.MessageID,
-		"chat_id":    m.ChatID,
-		"sender_id":  m.SenderID,
-		"content":    base64.StdEncoding.EncodeToString(m.Content),
-		"timestamp":  m.Timestamp.UTC().Format(time.RFC3339Nano),
-		"public_key": base64.StdEncoding.EncodeToString(m.PublicKey),
+		"message_id":   m.MessageID,
+		"chat_id":      m.ChatID,
+		"sender_id":    m.SenderID,
+		"content":      base64.StdEncoding.EncodeToString(m.Content),
+		"content_type": m.ContentType,
+		"filename":     m.Filename,
+		"encrypted":    encrypted,
+		"timestamp":    m.Timestamp.UTC().Format(time.RFC3339Nano),
+		"public_key":   base64.StdEncoding.EncodeToString(m.PublicKey),
 	}
 	// json.Marshal of a map sorts keys lexicographically, giving us a stable
 	// canonical form without insignificant whitespace.
