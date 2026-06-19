@@ -1,5 +1,7 @@
 # Decentralized Messenger
 
+[![CI](https://github.com/Artem-Kornilov-pro/decentralized-messenger/actions/workflows/ci.yml/badge.svg)](https://github.com/Artem-Kornilov-pro/decentralized-messenger/actions/workflows/ci.yml)
+
 A decentralized messenger with cryptographic message verification — no blockchain required. Written in **Go**.
 
 ## Concept
