@@ -5,8 +5,9 @@
 *.so
 *.dylib
 /bin/
+# the built binary at the repo root (not the cmd/messenger source dir)
 /messenger
-messenger
+/messenger.exe
 
 # Test & coverage
 *.test
