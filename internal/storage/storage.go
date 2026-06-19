@@ -30,6 +30,8 @@ type Storage interface {
 	SaveSnapshot(snap models.MerkleSnapshot) error
 	// LatestSnapshot returns the most recent snapshot, or ErrNotFound.
 	LatestSnapshot(chatID string) (models.MerkleSnapshot, error)
+	// SnapshotAt returns the snapshot with the given index, or ErrNotFound.
+	SnapshotAt(chatID string, index uint64) (models.MerkleSnapshot, error)
 }
 
 // ErrSequenceGap is returned when an appended entry is not contiguous.
@@ -114,4 +116,15 @@ func (s *InMemoryStorage) LatestSnapshot(chatID string) (models.MerkleSnapshot, 
 		return models.MerkleSnapshot{}, ErrNotFound
 	}
 	return snaps[len(snaps)-1], nil
+}
+
+func (s *InMemoryStorage) SnapshotAt(chatID string, index uint64) (models.MerkleSnapshot, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	snaps := s.snapshots[chatID]
+	if index >= uint64(len(snaps)) {
+		return models.MerkleSnapshot{}, ErrNotFound
+	}
+	return snaps[index], nil
 }

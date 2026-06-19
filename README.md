@@ -120,6 +120,7 @@ go run ./cmd/messenger -addr :8080
 | `POST` | `/chats/{chatID}/messages` | Sign and append a text message |
 | `GET`  | `/chats/{chatID}/messages` | List history (`?from=&limit=`, paginated) |
 | `GET`  | `/chats/{chatID}/messages/{sequence}` | Fetch a single message by sequence |
+| `GET`  | `/chats/{chatID}/messages/{sequence}/proof` | Merkle inclusion proof for a message |
 | `POST` | `/chats/{chatID}/photos` | Encrypt, sign, and append a photo |
 | `GET`  | `/chats/{chatID}/verify` | Verify full chat integrity |
 | `GET`  | `/chats/{chatID}/sync` | Get the catch-up bundle for a new participant |
@@ -172,6 +173,15 @@ Every message in the system satisfies three cryptographic properties:
 - **Authenticity** — Ed25519 signature proves the message came from the claimed sender
 - **Integrity** — the chained hash makes any modification of a past message detectable
 - **Completeness** — Merkle root snapshots let any party prove no messages are missing
+
+### Inclusion proofs
+
+`GET /chats/{chatID}/messages/{sequence}/proof` returns a **Merkle inclusion
+proof**: the entry hash, the sibling hashes along its path, and the snapshot's
+Merkle root. A participant verifies a message belongs to the chat's history by
+recomputing the root from the entry hash and the proof — without downloading the
+full log. Proofs become available once the covering snapshot is sealed (every
+100 messages); requesting one earlier returns `409 Conflict`.
 
 ### Encrypted content (text & photos)
 

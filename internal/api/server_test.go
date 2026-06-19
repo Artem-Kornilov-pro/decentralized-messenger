@@ -9,6 +9,7 @@ import (
 
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/chatlog"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/crypto"
+	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/merkle"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/models"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/service"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/storage"
@@ -98,6 +99,35 @@ func TestGetMessageNotFound(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/chats/c1/messages/99", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", rec.Code)
+	}
+}
+
+func TestProofEndpoint(t *testing.T) {
+	h := newTestServer()
+
+	// Before a snapshot is sealed, a proof is unavailable.
+	sendText(t, h, "c1", "first")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/chats/c1/messages/0/proof", nil))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409 before snapshot, got %d", rec.Code)
+	}
+
+	// Fill the window to seal a snapshot, then a proof verifies.
+	for i := 1; i < models.SnapshotInterval; i++ {
+		sendText(t, h, "c1", "msg")
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/chats/c1/messages/7/proof", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 after snapshot, got %d: %s", rec.Code, rec.Body)
+	}
+	var proof chatlog.InclusionProof
+	if err := json.Unmarshal(rec.Body.Bytes(), &proof); err != nil {
+		t.Fatal(err)
+	}
+	if !merkle.VerifyProof(proof.EntryHash, proof.Proof, proof.MerkleRoot) {
+		t.Fatal("returned proof failed to verify")
 	}
 }
 

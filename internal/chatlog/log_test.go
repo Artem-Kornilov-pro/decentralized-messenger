@@ -1,12 +1,14 @@
 package chatlog
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/broker"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/cache"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/crypto"
+	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/merkle"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/models"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/storage"
 )
@@ -133,6 +135,44 @@ func TestAppendPublishesEventAndCachesRoot(t *testing.T) {
 	}
 	if root, ok := c.GetMerkleRoot("c1"); !ok || root == "" {
 		t.Fatal("expected Merkle root cached after snapshot")
+	}
+}
+
+func TestProveInclusionVerifies(t *testing.T) {
+	lg := New(storage.NewInMemoryStorage())
+	priv, pub, _ := crypto.GenerateKeyPair()
+	for i := 0; i < models.SnapshotInterval; i++ {
+		if _, err := lg.Append(newSignedMessage(t, "c1", string(rune(i)), priv, pub)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, seq := range []uint64{0, 42, models.SnapshotInterval - 1} {
+		proof, err := lg.ProveInclusion("c1", seq)
+		if err != nil {
+			t.Fatalf("seq %d: %v", seq, err)
+		}
+		if !merkle.VerifyProof(proof.EntryHash, proof.Proof, proof.MerkleRoot) {
+			t.Fatalf("seq %d: proof failed to verify", seq)
+		}
+		// A wrong entry hash must not verify against the same proof.
+		if merkle.VerifyProof("tampered", proof.Proof, proof.MerkleRoot) {
+			t.Fatalf("seq %d: tampered leaf verified", seq)
+		}
+	}
+}
+
+func TestProveInclusionNotSnapshotted(t *testing.T) {
+	lg := New(storage.NewInMemoryStorage())
+	priv, pub, _ := crypto.GenerateKeyPair()
+	// Only a handful of messages — no snapshot sealed yet.
+	for i := 0; i < 5; i++ {
+		if _, err := lg.Append(newSignedMessage(t, "c1", string(rune(i)), priv, pub)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := lg.ProveInclusion("c1", 2); !errors.Is(err, ErrNotSnapshotted) {
+		t.Fatalf("expected ErrNotSnapshotted, got %v", err)
 	}
 }
 

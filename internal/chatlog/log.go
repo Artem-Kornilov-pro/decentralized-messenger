@@ -141,6 +141,64 @@ func (l *Log) snapshot(chatID string, tip models.LogEntry) error {
 	return nil
 }
 
+// ErrNotSnapshotted is returned when no sealed Merkle snapshot yet covers the
+// requested message. Snapshots are sealed every models.SnapshotInterval
+// messages, so the most recent messages are not provable until the window fills.
+var ErrNotSnapshotted = errors.New("chatlog: message not yet covered by a snapshot")
+
+// InclusionProof shows that a specific entry is part of a sealed snapshot's
+// Merkle tree. A verifier checks it with merkle.VerifyProof(EntryHash, Proof,
+// MerkleRoot) and confirms MerkleRoot against a trusted snapshot.
+type InclusionProof struct {
+	ChatID        string             `json:"chat_id"`
+	Sequence      uint64             `json:"sequence"`
+	EntryHash     string             `json:"entry_hash"`
+	SnapshotIndex uint64             `json:"snapshot_index"`
+	MerkleRoot    string             `json:"merkle_root"`
+	Proof         []merkle.ProofNode `json:"proof"`
+}
+
+// ProveInclusion builds a Merkle inclusion proof for the message at the given
+// sequence against the snapshot whose window contains it. It returns
+// ErrNotSnapshotted if that snapshot has not been sealed yet.
+func (l *Log) ProveInclusion(chatID string, sequence uint64) (InclusionProof, error) {
+	snapIndex := sequence / models.SnapshotInterval
+	snap, err := l.store.SnapshotAt(chatID, snapIndex)
+	if errors.Is(err, storage.ErrNotFound) {
+		return InclusionProof{}, ErrNotSnapshotted
+	}
+	if err != nil {
+		return InclusionProof{}, err
+	}
+
+	window, err := l.store.EntriesSince(chatID, snap.FromSequence)
+	if err != nil {
+		return InclusionProof{}, err
+	}
+	size := int(snap.ToSequence - snap.FromSequence + 1)
+	if len(window) < size {
+		return InclusionProof{}, fmt.Errorf("snapshot window incomplete: have %d of %d", len(window), size)
+	}
+	leaves := make([]string, size)
+	for i := 0; i < size; i++ {
+		leaves[i] = window[i].EntryHash
+	}
+
+	localIdx := int(sequence - snap.FromSequence)
+	proof, root := merkle.Proof(leaves, localIdx)
+	if root != snap.MerkleRoot {
+		return InclusionProof{}, fmt.Errorf("recomputed root does not match snapshot")
+	}
+	return InclusionProof{
+		ChatID:        chatID,
+		Sequence:      sequence,
+		EntryHash:     leaves[localIdx],
+		SnapshotIndex: snapIndex,
+		MerkleRoot:    snap.MerkleRoot,
+		Proof:         proof,
+	}, nil
+}
+
 // History returns up to limit entries starting at sequence from, in order. A
 // limit <= 0 returns all entries from from onward.
 func (l *Log) History(chatID string, from uint64, limit int) ([]models.LogEntry, error) {

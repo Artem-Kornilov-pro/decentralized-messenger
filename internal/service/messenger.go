@@ -105,6 +105,12 @@ func (m *Messenger) Message(chatID string, sequence uint64) (models.LogEntry, er
 	return m.log.Entry(chatID, sequence)
 }
 
+// ProveInclusion returns a Merkle inclusion proof for a message, letting any
+// participant verify it belongs to the chat's history without the full log.
+func (m *Messenger) ProveInclusion(chatID string, sequence uint64) (chatlog.InclusionProof, error) {
+	return m.log.ProveInclusion(chatID, sequence)
+}
+
 // Verify checks the full integrity of a chat's history.
 func (m *Messenger) Verify(chatID string) (chatlog.VerifyResult, error) {
 	return m.log.Verify(chatID)

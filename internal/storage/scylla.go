@@ -173,6 +173,34 @@ func scanEntry(chatID string, iter *gocql.Iter) (models.LogEntry, bool) {
 	}, true
 }
 
+func (s *Scylla) SnapshotAt(chatID string, index uint64) (models.MerkleSnapshot, error) {
+	var (
+		from, to       int64
+		root, lastHash string
+		createdAt      time.Time
+	)
+	err := s.session.Query(
+		`SELECT from_sequence, to_sequence, merkle_root, last_entry_hash, created_at
+		 FROM snapshots WHERE chat_id = ? AND snapshot_index = ?`,
+		chatID, int64(index),
+	).Scan(&from, &to, &root, &lastHash, &createdAt)
+	if err == gocql.ErrNotFound {
+		return models.MerkleSnapshot{}, ErrNotFound
+	}
+	if err != nil {
+		return models.MerkleSnapshot{}, err
+	}
+	return models.MerkleSnapshot{
+		ChatID:        chatID,
+		SnapshotIndex: index,
+		FromSequence:  uint64(from),
+		ToSequence:    uint64(to),
+		MerkleRoot:    root,
+		LastEntryHash: lastHash,
+		CreatedAt:     createdAt.UTC(),
+	}, nil
+}
+
 func (s *Scylla) SaveSnapshot(snap models.MerkleSnapshot) error {
 	return s.session.Query(
 		`INSERT INTO snapshots

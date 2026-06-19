@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/chatlog"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/crypto"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/models"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/service"
@@ -38,6 +39,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /chats/{chatID}/messages", s.handleSend)
 	mux.HandleFunc("GET /chats/{chatID}/messages", s.handleHistory)
 	mux.HandleFunc("GET /chats/{chatID}/messages/{sequence}", s.handleMessage)
+	mux.HandleFunc("GET /chats/{chatID}/messages/{sequence}/proof", s.handleProof)
 	mux.HandleFunc("POST /chats/{chatID}/photos", s.handleSendPhoto)
 	mux.HandleFunc("GET /chats/{chatID}/verify", s.handleVerify)
 	mux.HandleFunc("GET /chats/{chatID}/sync", s.handleSync)
@@ -167,6 +169,26 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, entry)
+}
+
+func (s *Server) handleProof(w http.ResponseWriter, r *http.Request) {
+	chatID := r.PathValue("chatID")
+	sequence, err := strconv.ParseUint(r.PathValue("sequence"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "sequence must be a non-negative integer")
+		return
+	}
+
+	proof, err := s.svc.ProveInclusion(chatID, sequence)
+	if errors.Is(err, chatlog.ErrNotSnapshotted) {
+		writeError(w, http.StatusConflict, "no snapshot yet covers this message (snapshots seal every 100 messages)")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, proof)
 }
 
 // parseUintQuery reads an unsigned integer query parameter, returning fallback
