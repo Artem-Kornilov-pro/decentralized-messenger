@@ -88,6 +88,16 @@ go build ./...
 go test ./...
 ```
 
+Common tasks are wrapped in a `Makefile` (`make help` lists them):
+
+```bash
+make check        # gofmt-check + vet + build + test (the CI suite)
+make demo         # run the in-process demonstration
+make run          # start the HTTP node
+make docker       # build the Docker image
+make compose-up   # start the full stack
+```
+
 ### Run the demo
 
 A self-contained demonstration of signing, hash-chaining, and verification:
