@@ -121,6 +121,7 @@ go run ./cmd/messenger -addr :8080
 | `GET`  | `/chats/{chatID}/messages` | List history (`?from=&limit=`, paginated) |
 | `GET`  | `/chats/{chatID}/messages/{sequence}` | Fetch a single message by sequence |
 | `GET`  | `/chats/{chatID}/messages/{sequence}/proof` | Merkle inclusion proof for a message |
+| `GET`  | `/chats/{chatID}/messages/{sequence}/verify` | Verify a single message |
 | `POST` | `/chats/{chatID}/photos` | Encrypt, sign, and append a photo |
 | `GET`  | `/chats/{chatID}/verify` | Verify full chat integrity |
 | `GET`  | `/chats/{chatID}/sync` | Get the catch-up bundle for a new participant |

@@ -230,6 +230,48 @@ func (l *Log) Entry(chatID string, sequence uint64) (models.LogEntry, error) {
 	return l.store.Entry(chatID, sequence)
 }
 
+// MessageVerification reports the outcome of verifying a single message.
+type MessageVerification struct {
+	Sequence uint64 `json:"sequence"`
+	Valid    bool   `json:"valid"`
+	Reason   string `json:"reason,omitempty"` // populated when Valid is false
+}
+
+// VerifyEntry checks one message in isolation: supported schema version, intact
+// entry hash, valid signature, and a correct chain link to its predecessor. It
+// returns storage.ErrNotFound if the message does not exist.
+func (l *Log) VerifyEntry(chatID string, sequence uint64) (MessageVerification, error) {
+	e, err := l.store.Entry(chatID, sequence)
+	if err != nil {
+		return MessageVerification{}, err
+	}
+
+	res := MessageVerification{Sequence: sequence}
+	switch {
+	case !supportedVersion(e.Message.SchemaVersion):
+		res.Reason = "unsupported schema version"
+	case e.ComputeHash() != e.EntryHash:
+		res.Reason = "tampered entry"
+	case !crypto.VerifyMessage(e.Message):
+		res.Reason = "bad signature"
+	default:
+		expectedPrev := models.GenesisHash
+		if sequence > 0 {
+			prev, err := l.store.Entry(chatID, sequence-1)
+			if err != nil {
+				return MessageVerification{}, err
+			}
+			expectedPrev = prev.EntryHash
+		}
+		if e.PrevHash != expectedPrev {
+			res.Reason = "broken chain link to previous entry"
+		} else {
+			res.Valid = true
+		}
+	}
+	return res, nil
+}
+
 // VerifyResult reports the outcome of a full-chain integrity check.
 type VerifyResult struct {
 	Valid   bool   `json:"valid"`

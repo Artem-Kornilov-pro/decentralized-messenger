@@ -131,6 +131,30 @@ func TestProofEndpoint(t *testing.T) {
 	}
 }
 
+func TestVerifyMessageEndpoint(t *testing.T) {
+	h := newTestServer()
+	sendText(t, h, "c1", "hello")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/chats/c1/messages/0/verify", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var res chatlog.MessageVerification
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if !res.Valid || res.Sequence != 0 {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/chats/c1/messages/9/verify", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for missing message, got %d", rec.Code)
+	}
+}
+
 func TestGetMessageBadSequence(t *testing.T) {
 	h := newTestServer()
 	rec := httptest.NewRecorder()

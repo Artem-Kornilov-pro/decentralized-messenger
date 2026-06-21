@@ -112,6 +112,12 @@ func (m *Messenger) ProveInclusion(chatID string, sequence uint64) (chatlog.Incl
 	return m.log.ProveInclusion(chatID, sequence)
 }
 
+// VerifyMessage checks a single message: signature, schema version, entry hash,
+// and its chain link to the previous entry.
+func (m *Messenger) VerifyMessage(chatID string, sequence uint64) (chatlog.MessageVerification, error) {
+	return m.log.VerifyEntry(chatID, sequence)
+}
+
 // Verify checks the full integrity of a chat's history.
 func (m *Messenger) Verify(chatID string) (chatlog.VerifyResult, error) {
 	return m.log.Verify(chatID)

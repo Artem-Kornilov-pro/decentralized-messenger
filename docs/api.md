@@ -37,6 +37,7 @@ BASE=http://localhost:8080
 | `GET`  | `/chats/{chatID}/messages` | List history (paginated) |
 | `GET`  | `/chats/{chatID}/messages/{sequence}` | Fetch one message by sequence |
 | `GET`  | `/chats/{chatID}/messages/{sequence}/proof` | Merkle inclusion proof |
+| `GET`  | `/chats/{chatID}/messages/{sequence}/verify` | Verify one message |
 | `POST` | `/chats/{chatID}/photos` | Encrypt, sign, and append a photo |
 | `GET`  | `/chats/{chatID}/verify` | Verify full chat integrity |
 | `GET`  | `/chats/{chatID}/sync` | Catch-up bundle for a new participant |
@@ -160,6 +161,18 @@ curl -s $BASE/chats/demo/messages/7/proof
 Verification (pseudocode): start with `running = entry_hash`; for each node,
 `running = is_left ? H(node.hash + running) : H(running + node.hash)`; accept if
 `running == merkle_root`.
+
+### `GET /chats/{chatID}/messages/{sequence}/verify`
+
+Verify a single message without scanning the whole chat: supported schema
+version, intact entry hash, valid Ed25519 signature, and a correct chain link to
+its predecessor. `404` if the message does not exist.
+
+```bash
+curl -s $BASE/chats/demo/messages/0/verify
+# {"sequence":0,"valid":true}
+# on failure: {"sequence":0,"valid":false,"reason":"bad signature"}
+```
 
 ---
 

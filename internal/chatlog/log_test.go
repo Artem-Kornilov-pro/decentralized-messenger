@@ -158,6 +158,56 @@ func TestAppendPublishesEventAndCachesRoot(t *testing.T) {
 	}
 }
 
+func TestVerifyEntryValid(t *testing.T) {
+	store := storage.NewInMemoryStorage()
+	lg := New(store)
+	priv, pub, _ := crypto.GenerateKeyPair()
+	for i := 0; i < 3; i++ {
+		if _, err := lg.Append(newSignedMessage(t, "c1", string(rune('a'+i)), priv, pub)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for seq := uint64(0); seq < 3; seq++ {
+		res, err := lg.VerifyEntry("c1", seq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.Valid || res.Sequence != seq {
+			t.Fatalf("seq %d: unexpected result %+v", seq, res)
+		}
+	}
+}
+
+func TestVerifyEntryDetectsTamper(t *testing.T) {
+	store := storage.NewInMemoryStorage()
+	lg := New(store)
+	priv, pub, _ := crypto.GenerateKeyPair()
+
+	// Craft an entry whose hash is valid for the original content, then forge the
+	// content so the stored entry hash no longer matches.
+	entry := models.LogEntry{Sequence: 0, Message: newSignedMessage(t, "c1", "hello", priv, pub), PrevHash: models.GenesisHash}
+	entry.EntryHash = entry.ComputeHash()
+	entry.Message.Content = []byte("forged")
+	if err := store.AppendEntry("c1", entry); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := lg.VerifyEntry("c1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Valid || res.Reason == "" {
+		t.Fatalf("expected tamper to be detected, got %+v", res)
+	}
+}
+
+func TestVerifyEntryNotFound(t *testing.T) {
+	lg := New(storage.NewInMemoryStorage())
+	if _, err := lg.VerifyEntry("c1", 0); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
 func TestProveInclusionVerifies(t *testing.T) {
 	lg := New(storage.NewInMemoryStorage())
 	priv, pub, _ := crypto.GenerateKeyPair()

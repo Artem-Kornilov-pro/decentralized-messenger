@@ -40,6 +40,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /chats/{chatID}/messages", s.handleHistory)
 	mux.HandleFunc("GET /chats/{chatID}/messages/{sequence}", s.handleMessage)
 	mux.HandleFunc("GET /chats/{chatID}/messages/{sequence}/proof", s.handleProof)
+	mux.HandleFunc("GET /chats/{chatID}/messages/{sequence}/verify", s.handleVerifyMessage)
 	mux.HandleFunc("POST /chats/{chatID}/photos", s.handleSendPhoto)
 	mux.HandleFunc("GET /chats/{chatID}/verify", s.handleVerify)
 	mux.HandleFunc("GET /chats/{chatID}/sync", s.handleSync)
@@ -169,6 +170,26 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, entry)
+}
+
+func (s *Server) handleVerifyMessage(w http.ResponseWriter, r *http.Request) {
+	chatID := r.PathValue("chatID")
+	sequence, err := strconv.ParseUint(r.PathValue("sequence"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "sequence must be a non-negative integer")
+		return
+	}
+
+	result, err := s.svc.VerifyMessage(chatID, sequence)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "message not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleProof(w http.ResponseWriter, r *http.Request) {
