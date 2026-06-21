@@ -16,12 +16,13 @@ import (
 func newSignedMessage(t *testing.T, chatID, text string, priv, pub []byte) models.SignedMessage {
 	t.Helper()
 	msg := models.SignedMessage{
-		MessageID: text,
-		ChatID:    chatID,
-		SenderID:  "alice",
-		Content:   []byte(text),
-		Timestamp: time.Now().UTC(),
-		PublicKey: pub,
+		SchemaVersion: models.CurrentSchemaVersion,
+		MessageID:     text,
+		ChatID:        chatID,
+		SenderID:      "alice",
+		Content:       []byte(text),
+		Timestamp:     time.Now().UTC(),
+		PublicKey:     pub,
 	}
 	return crypto.SignMessage(msg, priv)
 }
@@ -56,16 +57,35 @@ func TestAppendRejectsBadSignature(t *testing.T) {
 	_, pub, _ := crypto.GenerateKeyPair()
 
 	msg := models.SignedMessage{
-		MessageID: "x",
-		ChatID:    "c1",
-		SenderID:  "alice",
-		Content:   []byte("unsigned"),
-		Timestamp: time.Now().UTC(),
-		PublicKey: pub,
-		Signature: []byte("not a real signature"),
+		SchemaVersion: models.CurrentSchemaVersion,
+		MessageID:     "x",
+		ChatID:        "c1",
+		SenderID:      "alice",
+		Content:       []byte("unsigned"),
+		Timestamp:     time.Now().UTC(),
+		PublicKey:     pub,
+		Signature:     []byte("not a real signature"),
 	}
-	if _, err := lg.Append(msg); err == nil {
-		t.Fatal("expected invalid signature error")
+	if _, err := lg.Append(msg); !errors.Is(err, ErrInvalidSignature) {
+		t.Fatalf("expected ErrInvalidSignature, got %v", err)
+	}
+}
+
+func TestAppendRejectsUnsupportedVersion(t *testing.T) {
+	lg := New(storage.NewInMemoryStorage())
+	priv, pub, _ := crypto.GenerateKeyPair()
+	msg := models.SignedMessage{
+		SchemaVersion: models.CurrentSchemaVersion + 1, // a version this node can't validate
+		MessageID:     "x",
+		ChatID:        "c1",
+		SenderID:      "alice",
+		Content:       []byte("hi"),
+		Timestamp:     time.Now().UTC(),
+		PublicKey:     pub,
+	}
+	msg = crypto.SignMessage(msg, priv) // a perfectly valid signature...
+	if _, err := lg.Append(msg); !errors.Is(err, ErrUnsupportedVersion) {
+		t.Fatalf("expected ErrUnsupportedVersion, got %v", err)
 	}
 }
 

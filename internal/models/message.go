@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
 	"time"
 )
 
@@ -22,6 +23,12 @@ const (
 	ContentTypeText = "text/plain"
 )
 
+// CurrentSchemaVersion is the message schema version produced by this build.
+// It is bound into the signing payload so a verifier always knows exactly which
+// canonical format a signature covers; future format changes bump this constant
+// without invalidating signatures over older versions.
+const CurrentSchemaVersion = 1
+
 // SignedMessage is a chat message authenticated by the sender's Ed25519 key.
 //
 // Content holds the message body or attachment bytes. When Encrypted is true it
@@ -31,16 +38,17 @@ const (
 // PublicKey and Signature are NOT part of the signed payload; the payload is
 // the deterministic content produced by SigningPayload.
 type SignedMessage struct {
-	MessageID   string    `json:"message_id"`
-	ChatID      string    `json:"chat_id"`
-	SenderID    string    `json:"sender_id"`
-	Content     []byte    `json:"content"`
-	ContentType string    `json:"content_type"`
-	Filename    string    `json:"filename,omitempty"`
-	Encrypted   bool      `json:"encrypted"`
-	Timestamp   time.Time `json:"timestamp"`
-	PublicKey   []byte    `json:"public_key"`
-	Signature   []byte    `json:"signature"`
+	SchemaVersion int       `json:"schema_version"`
+	MessageID     string    `json:"message_id"`
+	ChatID        string    `json:"chat_id"`
+	SenderID      string    `json:"sender_id"`
+	Content       []byte    `json:"content"`
+	ContentType   string    `json:"content_type"`
+	Filename      string    `json:"filename,omitempty"`
+	Encrypted     bool      `json:"encrypted"`
+	Timestamp     time.Time `json:"timestamp"`
+	PublicKey     []byte    `json:"public_key"`
+	Signature     []byte    `json:"signature"`
 }
 
 // SigningPayload returns the canonical bytes that are signed and verified.
@@ -54,15 +62,16 @@ func (m SignedMessage) SigningPayload() []byte {
 		encrypted = "true"
 	}
 	payload := map[string]string{
-		"message_id":   m.MessageID,
-		"chat_id":      m.ChatID,
-		"sender_id":    m.SenderID,
-		"content":      base64.StdEncoding.EncodeToString(m.Content),
-		"content_type": m.ContentType,
-		"filename":     m.Filename,
-		"encrypted":    encrypted,
-		"timestamp":    m.Timestamp.UTC().Format(time.RFC3339Nano),
-		"public_key":   base64.StdEncoding.EncodeToString(m.PublicKey),
+		"schema_version": strconv.Itoa(m.SchemaVersion),
+		"message_id":     m.MessageID,
+		"chat_id":        m.ChatID,
+		"sender_id":      m.SenderID,
+		"content":        base64.StdEncoding.EncodeToString(m.Content),
+		"content_type":   m.ContentType,
+		"filename":       m.Filename,
+		"encrypted":      encrypted,
+		"timestamp":      m.Timestamp.UTC().Format(time.RFC3339Nano),
+		"public_key":     base64.StdEncoding.EncodeToString(m.PublicKey),
 	}
 	// json.Marshal of a map sorts keys lexicographically, giving us a stable
 	// canonical form without insignificant whitespace.

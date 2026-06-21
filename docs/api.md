@@ -92,6 +92,7 @@ Response `201 Created` — a log entry:
 {
   "sequence": 0,
   "message": {
+    "schema_version": 1,
     "message_id": "…",
     "chat_id": "demo",
     "sender_id": "alice",
@@ -229,5 +230,13 @@ Errors are returned as `{"error": "message"}` with an appropriate status code:
 | `400 Bad Request` | Malformed body or query parameter |
 | `404 Not Found` | Message does not exist |
 | `409 Conflict` | No snapshot yet covers the requested message |
-| `422 Unprocessable Entity` | Invalid signature, oversized photo, etc. |
+| `422 Unprocessable Entity` | Invalid signature, unsupported schema version, oversized photo, etc. |
 | `500 Internal Server Error` | Unexpected server failure |
+
+## Schema version
+
+Every message carries a `schema_version` that is **bound into the signature**.
+A node only accepts and verifies versions it understands (currently `1`);
+messages with an unknown version are rejected with `422`. Because the version is
+part of the signed canonical payload, a future format change bumps the version
+without ever making an old message's signature ambiguous or invalid.

@@ -20,6 +20,16 @@ import (
 // ErrInvalidSignature is returned when a message fails Ed25519 verification.
 var ErrInvalidSignature = errors.New("chatlog: invalid message signature")
 
+// ErrUnsupportedVersion is returned when a message carries a schema version this
+// node does not understand, so it cannot validate the canonical signing format.
+var ErrUnsupportedVersion = errors.New("chatlog: unsupported message schema version")
+
+// supportedVersion reports whether this node can validate the given message
+// schema version. Extend this when adding backward-compatible format versions.
+func supportedVersion(v int) bool {
+	return v == models.CurrentSchemaVersion
+}
+
 // Log appends signed messages to per-chat append-only logs backed by a
 // storage.Storage, maintaining the hash chain and Merkle snapshots. It caches
 // the latest Merkle root and publishes log events to a broker.
@@ -58,6 +68,9 @@ func (l *Log) chatLock(chatID string) *sync.Mutex {
 // hash, and creates a Merkle snapshot when the window fills. It returns the
 // stored entry.
 func (l *Log) Append(msg models.SignedMessage) (models.LogEntry, error) {
+	if !supportedVersion(msg.SchemaVersion) {
+		return models.LogEntry{}, ErrUnsupportedVersion
+	}
 	if !crypto.VerifyMessage(msg) {
 		return models.LogEntry{}, ErrInvalidSignature
 	}
@@ -239,6 +252,9 @@ func (l *Log) Verify(chatID string) (VerifyResult, error) {
 		}
 		if e.PrevHash != prevHash {
 			return VerifyResult{Reason: fmt.Sprintf("broken chain at seq %d", e.Sequence)}, nil
+		}
+		if !supportedVersion(e.Message.SchemaVersion) {
+			return VerifyResult{Reason: fmt.Sprintf("unsupported schema version at seq %d", e.Sequence)}, nil
 		}
 		if e.ComputeHash() != e.EntryHash {
 			return VerifyResult{Reason: fmt.Sprintf("tampered entry at seq %d", e.Sequence)}, nil

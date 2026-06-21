@@ -15,9 +15,10 @@ import (
 // updated or deleted, satisfying the append-only guarantee at the storage tier.
 const Schema = `
 CREATE TABLE IF NOT EXISTS log_entries (
-    chat_id      text,
-    sequence     bigint,
-    message_id   text,
+    chat_id        text,
+    sequence       bigint,
+    schema_version int,
+    message_id     text,
     sender_id    text,
     content      blob,
     content_type text,
@@ -72,9 +73,9 @@ func (s *Scylla) AppendEntry(chatID string, entry models.LogEntry) error {
 	m := entry.Message
 	applied, err := s.session.Query(
 		`INSERT INTO log_entries
-		    (chat_id, sequence, message_id, sender_id, content, content_type, filename, encrypted, ts, public_key, signature, prev_hash, entry_hash)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS`,
-		chatID, int64(entry.Sequence), m.MessageID, m.SenderID, m.Content, m.ContentType, m.Filename, m.Encrypted,
+		    (chat_id, sequence, schema_version, message_id, sender_id, content, content_type, filename, encrypted, ts, public_key, signature, prev_hash, entry_hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS`,
+		chatID, int64(entry.Sequence), m.SchemaVersion, m.MessageID, m.SenderID, m.Content, m.ContentType, m.Filename, m.Encrypted,
 		m.Timestamp, m.PublicKey, m.Signature, entry.PrevHash, entry.EntryHash,
 	).MapScanCAS(map[string]any{})
 	if err != nil {
@@ -89,7 +90,7 @@ func (s *Scylla) AppendEntry(chatID string, entry models.LogEntry) error {
 
 func (s *Scylla) LastEntry(chatID string) (models.LogEntry, error) {
 	iter := s.session.Query(
-		`SELECT sequence, message_id, sender_id, content, content_type, filename, encrypted, ts, public_key, signature, prev_hash, entry_hash
+		`SELECT sequence, schema_version, message_id, sender_id, content, content_type, filename, encrypted, ts, public_key, signature, prev_hash, entry_hash
 		 FROM log_entries WHERE chat_id = ? ORDER BY sequence DESC LIMIT 1`,
 		chatID,
 	).Iter()
@@ -105,7 +106,7 @@ func (s *Scylla) LastEntry(chatID string) (models.LogEntry, error) {
 
 func (s *Scylla) Entry(chatID string, sequence uint64) (models.LogEntry, error) {
 	iter := s.session.Query(
-		`SELECT sequence, message_id, sender_id, content, content_type, filename, encrypted, ts, public_key, signature, prev_hash, entry_hash
+		`SELECT sequence, schema_version, message_id, sender_id, content, content_type, filename, encrypted, ts, public_key, signature, prev_hash, entry_hash
 		 FROM log_entries WHERE chat_id = ? AND sequence = ?`,
 		chatID, int64(sequence),
 	).Iter()
@@ -121,7 +122,7 @@ func (s *Scylla) Entry(chatID string, sequence uint64) (models.LogEntry, error) 
 
 func (s *Scylla) EntriesSince(chatID string, fromSequence uint64) ([]models.LogEntry, error) {
 	iter := s.session.Query(
-		`SELECT sequence, message_id, sender_id, content, content_type, filename, encrypted, ts, public_key, signature, prev_hash, entry_hash
+		`SELECT sequence, schema_version, message_id, sender_id, content, content_type, filename, encrypted, ts, public_key, signature, prev_hash, entry_hash
 		 FROM log_entries WHERE chat_id = ? AND sequence >= ? ORDER BY sequence ASC`,
 		chatID, int64(fromSequence),
 	).Iter()
@@ -145,28 +146,30 @@ func (s *Scylla) EntriesSince(chatID string, fromSequence uint64) ([]models.LogE
 func scanEntry(chatID string, iter *gocql.Iter) (models.LogEntry, bool) {
 	var (
 		seq                                        int64
+		schemaVersion                              int
 		messageID, senderID, contentType, filename string
 		prevHash, entryHash                        string
 		encrypted                                  bool
 		content, publicKey, signature              []byte
 		ts                                         time.Time
 	)
-	if !iter.Scan(&seq, &messageID, &senderID, &content, &contentType, &filename, &encrypted, &ts, &publicKey, &signature, &prevHash, &entryHash) {
+	if !iter.Scan(&seq, &schemaVersion, &messageID, &senderID, &content, &contentType, &filename, &encrypted, &ts, &publicKey, &signature, &prevHash, &entryHash) {
 		return models.LogEntry{}, false
 	}
 	return models.LogEntry{
 		Sequence: uint64(seq),
 		Message: models.SignedMessage{
-			MessageID:   messageID,
-			ChatID:      chatID,
-			SenderID:    senderID,
-			Content:     content,
-			ContentType: contentType,
-			Filename:    filename,
-			Encrypted:   encrypted,
-			Timestamp:   ts.UTC(),
-			PublicKey:   publicKey,
-			Signature:   signature,
+			SchemaVersion: schemaVersion,
+			MessageID:     messageID,
+			ChatID:        chatID,
+			SenderID:      senderID,
+			Content:       content,
+			ContentType:   contentType,
+			Filename:      filename,
+			Encrypted:     encrypted,
+			Timestamp:     ts.UTC(),
+			PublicKey:     publicKey,
+			Signature:     signature,
 		},
 		PrevHash:  prevHash,
 		EntryHash: entryHash,

@@ -80,15 +80,16 @@ func (m *Messenger) DecryptContent(msg models.SignedMessage, contentKey []byte) 
 // appendSigned assembles, signs, and appends a message.
 func (m *Messenger) appendSigned(chatID string, sender Sender, content []byte, contentType, filename string, encrypted bool) (models.LogEntry, error) {
 	msg := models.SignedMessage{
-		MessageID:   newID(),
-		ChatID:      chatID,
-		SenderID:    sender.ID,
-		Content:     content,
-		ContentType: contentType,
-		Filename:    filename,
-		Encrypted:   encrypted,
-		Timestamp:   time.Now().UTC(),
-		PublicKey:   sender.PublicKey,
+		SchemaVersion: models.CurrentSchemaVersion,
+		MessageID:     newID(),
+		ChatID:        chatID,
+		SenderID:      sender.ID,
+		Content:       content,
+		ContentType:   contentType,
+		Filename:      filename,
+		Encrypted:     encrypted,
+		Timestamp:     time.Now().UTC(),
+		PublicKey:     sender.PublicKey,
 	}
 	msg = crypto.SignMessage(msg, sender.PrivateKey)
 	return m.log.Append(msg)
