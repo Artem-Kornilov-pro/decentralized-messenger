@@ -219,9 +219,9 @@ func (l *Log) Entry(chatID string, sequence uint64) (models.LogEntry, error) {
 
 // VerifyResult reports the outcome of a full-chain integrity check.
 type VerifyResult struct {
-	Valid   bool
-	Entries uint64
-	Reason  string // populated when Valid is false
+	Valid   bool   `json:"valid"`
+	Entries uint64 `json:"entries"`
+	Reason  string `json:"reason,omitempty"` // populated when Valid is false
 }
 
 // Verify walks a chat's entire log, checking the hash chain, recomputing each

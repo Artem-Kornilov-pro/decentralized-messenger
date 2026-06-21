@@ -201,7 +201,9 @@ their MIME type, and an optional filename (plaintext capped at 10 MiB). The
 message carries `content_type`, `filename`, and an `encrypted` flag, all bound
 into the signature.
 
-See [docs/architecture.md](docs/architecture.md) for diagrams and data flow.
+See [docs/api.md](docs/api.md) for the full HTTP API with curl examples
+(including the encrypted-photo flow and inclusion-proof verification), and
+[docs/architecture.md](docs/architecture.md) for diagrams and data flow.
 
 ## License
 
