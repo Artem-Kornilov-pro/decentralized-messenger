@@ -4,12 +4,16 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/api"
@@ -19,6 +23,19 @@ import (
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/crypto"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/service"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/storage"
+)
+
+// Server tuning. These are conservative defaults that defend against slow
+// clients (e.g. slowloris) while leaving room for 10 MiB photo uploads.
+const (
+	readHeaderTimeout = 5 * time.Second
+	readTimeout       = 30 * time.Second
+	writeTimeout      = 30 * time.Second
+	idleTimeout       = 120 * time.Second
+	shutdownTimeout   = 15 * time.Second
+	// maxRequestBytes caps a request body. A 10 MiB photo inflates ~1.37x under
+	// base64 and travels with JSON envelope fields, so allow generous headroom.
+	maxRequestBytes = 24 << 20
 )
 
 func main() {
@@ -36,10 +53,54 @@ func main() {
 		return
 	}
 
-	srv := api.NewServer(svc)
-	log.Printf("messenger node listening on %s", *addr)
-	if err := http.ListenAndServe(*addr, srv.Handler()); err != nil {
+	if err := serve(*addr, api.NewServer(svc).Handler()); err != nil {
 		log.Fatalf("server error: %v", err)
+	}
+}
+
+// serve runs the HTTP server with hardened timeouts and shuts it down
+// gracefully on SIGINT/SIGTERM, draining in-flight requests.
+func serve(addr string, handler http.Handler) error {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           http.MaxBytesHandler(handler, maxRequestBytes),
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+	}
+
+	// Translate termination signals into a context cancellation.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	return runUntilShutdown(ctx, srv)
+}
+
+// runUntilShutdown serves until srv fails or ctx is cancelled, then drains
+// in-flight requests within shutdownTimeout. It is decoupled from OS signals so
+// the shutdown path can be tested with any cancellable context.
+func runUntilShutdown(ctx context.Context, srv *http.Server) error {
+	errCh := make(chan error, 1)
+	go func() {
+		log.Printf("messenger node listening on %s", srv.Addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+	}()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		log.Print("shutdown signal received, draining connections")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("graceful shutdown: %w", err)
+		}
+		log.Print("shutdown complete")
+		return nil
 	}
 }
 

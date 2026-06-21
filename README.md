@@ -157,6 +157,20 @@ full stack.
 Before first use, apply the ScyllaDB schema (exported as `storage.Schema`) to
 your keyspace — it creates the immutable `log_entries` and `snapshots` tables.
 
+### Operational hardening
+
+The HTTP node is built for unattended operation rather than just demos:
+
+- **Request timeouts** — `ReadHeaderTimeout` (5s), `ReadTimeout` (30s),
+  `WriteTimeout` (30s), and `IdleTimeout` (120s) bound slow clients and defend
+  against slowloris-style attacks.
+- **Body size limit** — request bodies are capped at 24 MiB (headroom for a
+  base64-encoded 10 MiB photo); larger uploads get `413`.
+- **Graceful shutdown** — on `SIGINT`/`SIGTERM` the server stops accepting new
+  connections and drains in-flight requests within a 15s deadline before
+  exiting, so deploys and restarts don't drop active requests.
+- **Liveness** — `GET /healthz` for container/orchestrator probes.
+
 ### Run the infrastructure stack
 
 ```bash
