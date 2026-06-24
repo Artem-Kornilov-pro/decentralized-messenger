@@ -51,6 +51,24 @@ type SignedMessage struct {
 	Signature     []byte    `json:"signature"`
 }
 
+// NewMessage builds an unsigned SignedMessage ready for the caller to sign
+// with crypto.SignMessage. Callers construct and sign messages locally —
+// servers never see a private key, only the resulting signature.
+func NewMessage(chatID, senderID string, publicKey, content []byte, contentType, filename string, encrypted bool) SignedMessage {
+	return SignedMessage{
+		SchemaVersion: CurrentSchemaVersion,
+		MessageID:     NewMessageID(),
+		ChatID:        chatID,
+		SenderID:      senderID,
+		Content:       content,
+		ContentType:   contentType,
+		Filename:      filename,
+		Encrypted:     encrypted,
+		Timestamp:     time.Now().UTC(),
+		PublicKey:     publicKey,
+	}
+}
+
 // SigningPayload returns the canonical bytes that are signed and verified.
 //
 // The encoding is deterministic across processes (sorted keys, no insignificant

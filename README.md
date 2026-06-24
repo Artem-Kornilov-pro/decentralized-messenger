@@ -68,6 +68,7 @@ in-memory implementation (the default) and a production adapter:
 | Key & root cache | Redis |
 | Node synchronization | RabbitMQ |
 | HTTP API | `net/http` |
+| Real-time push | WebSocket (`gorilla/websocket`) |
 | Monitoring | Grafana + Loki |
 | Containerization | Docker |
 
@@ -117,29 +118,37 @@ go run ./cmd/messenger -addr :8080
 | `GET`  | `/healthz` | Liveness probe |
 | `POST` | `/keys` | Generate an Ed25519 key pair (dev only) |
 | `POST` | `/keys/content` | Generate a symmetric content key (dev only) |
-| `POST` | `/chats/{chatID}/messages` | Sign and append a text message |
+| `POST` | `/chats/{chatID}/messages` | Append a pre-signed text message |
 | `GET`  | `/chats/{chatID}/messages` | List history (`?from=&limit=`, paginated) |
 | `GET`  | `/chats/{chatID}/messages/{sequence}` | Fetch a single message by sequence |
 | `GET`  | `/chats/{chatID}/messages/{sequence}/proof` | Merkle inclusion proof for a message |
 | `GET`  | `/chats/{chatID}/messages/{sequence}/verify` | Verify a single message |
-| `POST` | `/chats/{chatID}/photos` | Encrypt, sign, and append a photo |
+| `POST` | `/chats/{chatID}/photos` | Append a pre-signed, encrypted photo |
+| `POST` | `/chats/{chatID}/videos` | Append a pre-signed, encrypted video |
 | `GET`  | `/chats/{chatID}/verify` | Verify full chat integrity |
 | `GET`  | `/chats/{chatID}/sync` | Get the catch-up bundle for a new participant |
+| `GET`  | `/chats/{chatID}/ws` | WebSocket stream of new-entry/snapshot events |
 
-Example:
+Clients sign messages locally and never send a private key to the server:
+
+```go
+priv, pub, _ := crypto.GenerateKeyPair() // persisted locally by the client
+
+msg := models.NewMessage("demo", "alice", pub, []byte("hello"), models.ContentTypeText, "", false)
+msg = crypto.SignMessage(msg, priv)
+
+body, _ := json.Marshal(msg)
+http.Post("http://localhost:8080/chats/demo/messages", "application/json", bytes.NewReader(body))
+```
 
 ```bash
-# mint a key pair (dev convenience)
-curl -s -X POST localhost:8080/keys > keys.json
-
-# send a message
-curl -X POST localhost:8080/chats/demo/messages \
-  -H 'Content-Type: application/json' \
-  -d '{"sender_id":"alice","public_key":..., "private_key":..., "text":"hello"}'
-
 # verify the whole chat
 curl localhost:8080/chats/demo/verify
 ```
+
+See [docs/api.md](docs/api.md) for the full request/response shapes, the
+photo/video/WebSocket flows, and a `curl`-only walkthrough of the read-only
+endpoints.
 
 ### Configuration
 
@@ -198,27 +207,44 @@ recomputing the root from the entry hash and the proof — without downloading t
 full log. Proofs become available once the covering snapshot is sealed (every
 100 messages); requesting one earlier returns `409 Conflict`.
 
-### Encrypted content (text & photos)
+### Client-side signing
 
-Message bodies and photo attachments can be encrypted with a per-chat symmetric
-key (**AES-256-GCM**) before they ever reach the server:
+Clients build and sign messages locally (`models.NewMessage` +
+`crypto.SignMessage`) and submit only the result — a server never sees a
+private key, only the resulting signature. The `chat_id` a client signed must
+match the `chatID` in the URL; the server binds it from the path, so a
+message signed for one chat is rejected (`422`) if posted to another.
+
+### Encrypted content (text, photos & videos)
+
+Message bodies and attachments can be encrypted with a per-chat symmetric key
+(**AES-256-GCM**) before they ever reach the server:
 
 - The client encrypts the content and signs the **ciphertext**. The server
   stores and verifies only ciphertext — it never sees the content key, so it
-  cannot read messages or photos.
+  cannot read messages, photos, or videos.
 - A node can still verify authorship and integrity (the signature and hash
   chain cover the ciphertext), keeping the security model intact.
 - Only clients holding the chat's content key can decrypt. GCM authentication
   also detects any tampering with the stored bytes.
 
-Photos are sent via `POST /chats/{chatID}/photos` with the encrypted bytes,
-their MIME type, and an optional filename (plaintext capped at 10 MiB). The
-message carries `content_type`, `filename`, and an `encrypted` flag, all bound
-into the signature.
+Photos are sent via `POST /chats/{chatID}/photos` (plaintext capped at 10
+MiB) and videos via `POST /chats/{chatID}/videos` (capped at 50 MiB), each
+with the encrypted bytes, MIME type, and an optional filename. The message
+carries `content_type`, `filename`, and an `encrypted` flag, all bound into
+the signature.
 
-See [docs/api.md](docs/api.md) for the full HTTP API with curl examples
-(including the encrypted-photo flow and inclusion-proof verification), and
-[docs/architecture.md](docs/architecture.md) for diagrams and data flow.
+### Real-time delivery
+
+`GET /chats/{chatID}/ws` upgrades to a WebSocket and pushes a small
+notification for every new entry or sealed snapshot, so clients don't have to
+poll history. Clients still fetch the actual message via the REST endpoints —
+the socket only carries "something changed" events.
+
+See [docs/api.md](docs/api.md) for the full HTTP API with examples (including
+the signed-message, encrypted-photo/video, and WebSocket flows, and
+inclusion-proof verification), and [docs/architecture.md](docs/architecture.md)
+for diagrams and data flow.
 
 ## License
 

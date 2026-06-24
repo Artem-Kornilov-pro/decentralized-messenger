@@ -154,6 +154,13 @@ func (l *Log) snapshot(chatID string, tip models.LogEntry) error {
 	return nil
 }
 
+// Subscribe returns a channel of log events (new entries, sealed snapshots)
+// across all chats on this node, plus a cancel func the caller must call to
+// stop delivery and release the subscription.
+func (l *Log) Subscribe() (<-chan broker.Event, func(), error) {
+	return l.broker.Subscribe()
+}
+
 // ErrNotSnapshotted is returned when no sealed Merkle snapshot yet covers the
 // requested message. Snapshots are sealed every models.SnapshotInterval
 // messages, so the most recent messages are not provable until the window fills.

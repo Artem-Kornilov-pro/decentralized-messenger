@@ -6,6 +6,9 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
+
+	"github.com/gorilla/websocket"
 
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/chatlog"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/crypto"
@@ -13,6 +16,12 @@ import (
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/service"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/storage"
 )
+
+// pingInterval is how often handleStream sends a WebSocket ping to keep the
+// connection alive through intermediary proxies.
+const pingInterval = 20 * time.Second
+
+var upgrader = websocket.Upgrader{}
 
 // Pagination defaults for the history endpoint.
 const (
@@ -42,8 +51,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /chats/{chatID}/messages/{sequence}/proof", s.handleProof)
 	mux.HandleFunc("GET /chats/{chatID}/messages/{sequence}/verify", s.handleVerifyMessage)
 	mux.HandleFunc("POST /chats/{chatID}/photos", s.handleSendPhoto)
+	mux.HandleFunc("POST /chats/{chatID}/videos", s.handleSendVideo)
 	mux.HandleFunc("GET /chats/{chatID}/verify", s.handleVerify)
 	mux.HandleFunc("GET /chats/{chatID}/sync", s.handleSync)
+	mux.HandleFunc("GET /chats/{chatID}/ws", s.handleStream)
 	return mux
 }
 
@@ -51,26 +62,33 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-type sendRequest struct {
-	SenderID   string `json:"sender_id"`
-	PublicKey  []byte `json:"public_key"`
-	PrivateKey []byte `json:"private_key"`
-	Text       string `json:"text"`
+// decodeSignedMessage reads a models.SignedMessage from the request body and
+// binds it to the chat in the URL path: the chat_id is taken from the path,
+// not the body, so a message signed for a different chat fails verification
+// downstream instead of being silently accepted under the wrong chat.
+func decodeSignedMessage(r *http.Request, chatID string) (models.SignedMessage, error) {
+	var msg models.SignedMessage
+	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+		return models.SignedMessage{}, errors.New("invalid JSON body")
+	}
+	if msg.SenderID == "" || len(msg.PublicKey) == 0 || len(msg.Signature) == 0 {
+		return models.SignedMessage{}, errors.New("sender_id, public_key and signature are required")
+	}
+	msg.ChatID = chatID
+	return msg, nil
 }
 
+// handleSend appends a message the client has already signed locally (see
+// models.NewMessage and crypto.SignMessage). The server never sees a private
+// key — only the resulting signature.
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
-	chatID := r.PathValue("chatID")
-	var req sendRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	if req.SenderID == "" || len(req.PublicKey) == 0 || len(req.PrivateKey) == 0 {
-		writeError(w, http.StatusBadRequest, "sender_id, public_key and private_key are required")
+	msg, err := decodeSignedMessage(r, r.PathValue("chatID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	entry, err := s.svc.SendText(chatID, req.SenderID, req.PublicKey, req.PrivateKey, req.Text)
+	entry, err := s.svc.Submit(msg, 0)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -78,34 +96,29 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, entry)
 }
 
-type sendPhotoRequest struct {
-	SenderID    string `json:"sender_id"`
-	PublicKey   []byte `json:"public_key"`
-	PrivateKey  []byte `json:"private_key"`
-	ContentKey  []byte `json:"content_key"`
-	Photo       []byte `json:"photo"`
-	ContentType string `json:"content_type"`
-	Filename    string `json:"filename"`
+func (s *Server) handleSendPhoto(w http.ResponseWriter, r *http.Request) {
+	msg, err := decodeSignedMessage(r, r.PathValue("chatID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	entry, err := s.svc.Submit(msg, service.MaxPhotoBytes)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, entry)
 }
 
-func (s *Server) handleSendPhoto(w http.ResponseWriter, r *http.Request) {
-	chatID := r.PathValue("chatID")
-	var req sendPhotoRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	if req.SenderID == "" || len(req.PublicKey) == 0 || len(req.PrivateKey) == 0 {
-		writeError(w, http.StatusBadRequest, "sender_id, public_key and private_key are required")
-		return
-	}
-	if len(req.ContentKey) == 0 || len(req.Photo) == 0 {
-		writeError(w, http.StatusBadRequest, "content_key and photo are required")
+func (s *Server) handleSendVideo(w http.ResponseWriter, r *http.Request) {
+	msg, err := decodeSignedMessage(r, r.PathValue("chatID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	sender := service.Sender{ID: req.SenderID, PublicKey: req.PublicKey, PrivateKey: req.PrivateKey}
-	entry, err := s.svc.SendPhoto(chatID, sender, req.ContentKey, req.Photo, req.ContentType, req.Filename)
+	entry, err := s.svc.Submit(msg, service.MaxVideoBytes)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -247,6 +260,68 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, bundle)
+}
+
+// handleStream upgrades to a WebSocket and pushes log events (new entries,
+// sealed snapshots) for chatID as they happen, so clients don't have to poll
+// GET /chats/{chatID}/messages. Events are a notification only — clients
+// fetch the actual message via the existing REST endpoints.
+//
+// Subscribe() delivers every chat's events; filtering by ChatID happens here
+// rather than via per-chat broker routing. That's fine at this project's
+// scale — revisit with per-chat routing keys if fan-out volume ever matters.
+func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
+	chatID := r.PathValue("chatID")
+
+	// Subscribe before upgrading so the subscription is guaranteed to exist
+	// once the client's handshake completes — otherwise an event published
+	// between upgrade and subscribe would be missed.
+	events, cancel, err := s.svc.Subscribe()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer cancel()
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
+	ticker := time.NewTicker(pingInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-done:
+			return
+		case evt, ok := <-events:
+			if !ok {
+				return
+			}
+			if evt.ChatID != chatID {
+				continue
+			}
+			if err := conn.WriteJSON(evt); err != nil {
+				return
+			}
+		case <-ticker.C:
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+		}
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

@@ -21,6 +21,7 @@ import (
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/cache"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/chatlog"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/crypto"
+	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/models"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/service"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/storage"
 )
@@ -33,9 +34,10 @@ const (
 	writeTimeout      = 30 * time.Second
 	idleTimeout       = 120 * time.Second
 	shutdownTimeout   = 15 * time.Second
-	// maxRequestBytes caps a request body. A 10 MiB photo inflates ~1.37x under
-	// base64 and travels with JSON envelope fields, so allow generous headroom.
-	maxRequestBytes = 24 << 20
+	// maxRequestBytes caps a request body. A 50 MiB video (the largest
+	// attachment) inflates ~1.37x under base64 and travels with JSON envelope
+	// fields, so allow generous headroom.
+	maxRequestBytes = 72 << 20
 )
 
 func main() {
@@ -162,7 +164,12 @@ func runDemo(svc *service.Messenger) error {
 	const chatID = "demo-chat"
 
 	for i := 1; i <= 3; i++ {
-		entry, err := svc.SendText(chatID, "alice", pub, priv, fmt.Sprintf("message %d", i))
+		// A real client builds and signs the message locally, then submits
+		// only the result; the private key never leaves this point.
+		msg := models.NewMessage(chatID, "alice", pub, []byte(fmt.Sprintf("message %d", i)), models.ContentTypeText, "", false)
+		msg = crypto.SignMessage(msg, priv)
+
+		entry, err := svc.Submit(msg, 0)
 		if err != nil {
 			return err
 		}

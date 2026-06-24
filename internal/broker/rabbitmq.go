@@ -69,3 +69,51 @@ func (r *RabbitMQ) Publish(event Event) error {
 		Body:         body,
 	})
 }
+
+// Subscribe declares an anonymous, exclusive queue bound to every routing key
+// on the exchange and streams decoded events to the returned channel. The
+// queue and its consumer are torn down when cancel is called.
+func (r *RabbitMQ) Subscribe() (<-chan Event, func(), error) {
+	q, err := r.ch.QueueDeclare("", false, true, true, false, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := r.ch.QueueBind(q.Name, "#", exchangeName, false, nil); err != nil {
+		return nil, nil, err
+	}
+	consumerTag := "messenger-sub-" + q.Name
+	deliveries, err := r.ch.Consume(q.Name, consumerTag, true, true, false, false, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	out := make(chan Event, 64)
+	done := make(chan struct{})
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case d, ok := <-deliveries:
+				if !ok {
+					return
+				}
+				var evt Event
+				if err := json.Unmarshal(d.Body, &evt); err != nil {
+					continue
+				}
+				select {
+				case out <- evt:
+				default:
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	cancel := func() {
+		close(done)
+		_ = r.ch.Cancel(consumerTag, false)
+	}
+	return out, cancel, nil
+}
