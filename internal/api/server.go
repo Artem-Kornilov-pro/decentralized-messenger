@@ -4,6 +4,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/chatlog"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/crypto"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/models"
+	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/ratelimit"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/service"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/storage"
 )
@@ -31,12 +33,27 @@ const (
 
 // Server wires the Messenger service to HTTP handlers.
 type Server struct {
-	svc *service.Messenger
+	svc     *service.Messenger
+	limiter *ratelimit.Limiter
+}
+
+// Option configures a Server.
+type Option func(*Server)
+
+// WithRateLimit applies l to every request except /healthz, returning 429 Too
+// Many Requests once a client IP exceeds its budget. Omit this option to run
+// without rate limiting (the default — existing callers are unaffected).
+func WithRateLimit(l *ratelimit.Limiter) Option {
+	return func(s *Server) { s.limiter = l }
 }
 
 // NewServer returns an HTTP server for the given service.
-func NewServer(svc *service.Messenger) *Server {
-	return &Server{svc: svc}
+func NewServer(svc *service.Messenger, opts ...Option) *Server {
+	s := &Server{svc: svc}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Handler returns the configured HTTP mux.
@@ -55,7 +72,41 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /chats/{chatID}/verify", s.handleVerify)
 	mux.HandleFunc("GET /chats/{chatID}/sync", s.handleSync)
 	mux.HandleFunc("GET /chats/{chatID}/ws", s.handleStream)
-	return mux
+
+	if s.limiter == nil {
+		return mux
+	}
+	return s.rateLimitMiddleware(mux)
+}
+
+// rateLimitMiddleware rejects requests beyond a client IP's budget with 429,
+// except /healthz so liveness probes are never throttled.
+func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !s.limiter.Allow(clientIP(r)) {
+			w.Header().Set("Retry-After", "1")
+			writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// clientIP extracts the request's source IP, stripping the port. Note this is
+// the immediate TCP peer, not an X-Forwarded-For value — a node deployed
+// behind a reverse proxy would see the proxy's IP for every client. Trusting
+// forwarded headers safely needs an explicit trusted-proxy configuration,
+// which is out of scope here.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

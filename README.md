@@ -174,8 +174,15 @@ The HTTP node is built for unattended operation rather than just demos:
 - **Request timeouts** — `ReadHeaderTimeout` (5s), `ReadTimeout` (30s),
   `WriteTimeout` (30s), and `IdleTimeout` (120s) bound slow clients and defend
   against slowloris-style attacks.
-- **Body size limit** — request bodies are capped at 24 MiB (headroom for a
-  base64-encoded 10 MiB photo); larger uploads get `413`.
+- **Body size limit** — request bodies are capped at 72 MiB (headroom for a
+  base64-encoded 50 MiB video); larger uploads get `413`.
+- **Per-IP rate limiting** — every endpoint except `/healthz` is throttled per
+  client IP via a token bucket (`-rate-limit-rps`, default `5`;
+  `-rate-limit-burst`, default `20`); a client beyond its budget gets `429
+  Too Many Requests` with a `Retry-After` header. Set `-rate-limit-rps=0` to
+  disable. Note this keys on the immediate TCP peer, not
+  `X-Forwarded-For` — behind a reverse proxy, every client shares the proxy's
+  budget unless you front it with your own limiting.
 - **Graceful shutdown** — on `SIGINT`/`SIGTERM` the server stops accepting new
   connections and drains in-flight requests within a 15s deadline before
   exiting, so deploys and restarts don't drop active requests.
