@@ -1,11 +1,13 @@
 // Package service offers a high-level façade over the append-only log: it
-// constructs and signs messages and exposes send/verify/sync operations.
+// submits pre-signed messages and exposes read/verify/sync/subscribe
+// operations. Signing happens client-side (see models.NewMessage and
+// crypto.SignMessage) — this service never sees a private key.
 package service
 
 import (
 	"fmt"
-	"time"
 
+	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/broker"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/chatlog"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/crypto"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/models"
@@ -14,12 +16,8 @@ import (
 // MaxPhotoBytes caps the plaintext size of a photo attachment (10 MiB).
 const MaxPhotoBytes = 10 << 20
 
-// Sender identifies who is sending and signing a message.
-type Sender struct {
-	ID         string
-	PublicKey  []byte
-	PrivateKey []byte
-}
+// MaxVideoBytes caps the plaintext size of a video attachment (50 MiB).
+const MaxVideoBytes = 50 << 20
 
 // Messenger is the application-facing service.
 type Messenger struct {
@@ -31,68 +29,26 @@ func New(log *chatlog.Log) *Messenger {
 	return &Messenger{log: log}
 }
 
-// SendText builds a SignedMessage from plain text, signs it, and appends it.
-// The body is stored as-is (not encrypted); use SendEncryptedText for privacy.
-func (m *Messenger) SendText(chatID, senderID string, publicKey, privateKey []byte, text string) (models.LogEntry, error) {
-	return m.appendSigned(chatID, Sender{ID: senderID, PublicKey: publicKey, PrivateKey: privateKey},
-		[]byte(text), models.ContentTypeText, "", false)
-}
-
-// SendEncryptedText encrypts the text with the chat's symmetric content key and
-// appends the resulting ciphertext, signed by the sender.
-func (m *Messenger) SendEncryptedText(chatID string, sender Sender, contentKey []byte, text string) (models.LogEntry, error) {
-	ciphertext, err := crypto.Encrypt(contentKey, []byte(text))
-	if err != nil {
-		return models.LogEntry{}, fmt.Errorf("encrypt text: %w", err)
+// Submit appends a message the caller has already signed (see
+// models.NewMessage + crypto.SignMessage). The log re-verifies the signature
+// and schema version before accepting it. maxContentBytes, if > 0, rejects
+// content larger than that (used to cap photo/video attachments); pass 0 for
+// no extra cap beyond the server's request body limit.
+func (m *Messenger) Submit(msg models.SignedMessage, maxContentBytes int) (models.LogEntry, error) {
+	if maxContentBytes > 0 && len(msg.Content) > maxContentBytes {
+		return models.LogEntry{}, fmt.Errorf("content exceeds %d bytes", maxContentBytes)
 	}
-	return m.appendSigned(chatID, sender, ciphertext, models.ContentTypeText, "", true)
-}
-
-// SendPhoto encrypts a photo with the chat's symmetric content key and appends
-// the ciphertext, signed by the sender. contentType is the image MIME type
-// (e.g. "image/jpeg"); filename is optional metadata.
-func (m *Messenger) SendPhoto(chatID string, sender Sender, contentKey, photo []byte, contentType, filename string) (models.LogEntry, error) {
-	if len(photo) == 0 {
-		return models.LogEntry{}, fmt.Errorf("photo is empty")
-	}
-	if len(photo) > MaxPhotoBytes {
-		return models.LogEntry{}, fmt.Errorf("photo exceeds %d bytes", MaxPhotoBytes)
-	}
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
-	ciphertext, err := crypto.Encrypt(contentKey, photo)
-	if err != nil {
-		return models.LogEntry{}, fmt.Errorf("encrypt photo: %w", err)
-	}
-	return m.appendSigned(chatID, sender, ciphertext, contentType, filename, true)
+	return m.log.Append(msg)
 }
 
 // DecryptContent decrypts a message's stored content with the chat's content
-// key. It is the client-side counterpart to the SendEncrypted* methods.
+// key. It is the client-side counterpart to client-side encryption before
+// signing (see crypto.Encrypt).
 func (m *Messenger) DecryptContent(msg models.SignedMessage, contentKey []byte) ([]byte, error) {
 	if !msg.Encrypted {
 		return msg.Content, nil
 	}
 	return crypto.Decrypt(contentKey, msg.Content)
-}
-
-// appendSigned assembles, signs, and appends a message.
-func (m *Messenger) appendSigned(chatID string, sender Sender, content []byte, contentType, filename string, encrypted bool) (models.LogEntry, error) {
-	msg := models.SignedMessage{
-		SchemaVersion: models.CurrentSchemaVersion,
-		MessageID:     newID(),
-		ChatID:        chatID,
-		SenderID:      sender.ID,
-		Content:       content,
-		ContentType:   contentType,
-		Filename:      filename,
-		Encrypted:     encrypted,
-		Timestamp:     time.Now().UTC(),
-		PublicKey:     sender.PublicKey,
-	}
-	msg = crypto.SignMessage(msg, sender.PrivateKey)
-	return m.log.Append(msg)
 }
 
 // History returns up to limit messages of a chat starting at sequence from.
@@ -126,4 +82,11 @@ func (m *Messenger) Verify(chatID string) (chatlog.VerifyResult, error) {
 // Sync returns the catch-up bundle for a new participant.
 func (m *Messenger) Sync(chatID string) (chatlog.SyncBundle, error) {
 	return m.log.Sync(chatID)
+}
+
+// Subscribe returns a channel of log events (new entries, sealed snapshots)
+// across all chats, plus a cancel func the caller must call to stop delivery
+// and release the subscription. Callers filter by ChatID themselves.
+func (m *Messenger) Subscribe() (<-chan broker.Event, func(), error) {
+	return m.log.Subscribe()
 }

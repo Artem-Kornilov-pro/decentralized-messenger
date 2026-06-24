@@ -129,7 +129,11 @@ func TestAppendPublishesEventAndCachesRoot(t *testing.T) {
 	store := storage.NewInMemoryStorage()
 	c := cache.NewInMemory()
 	b := broker.NewInMemory()
-	sub := b.Subscribe()
+	sub, cancel, err := b.Subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
 	lg := New(store, WithCache(c), WithBroker(b))
 	priv, pub, _ := crypto.GenerateKeyPair()
 

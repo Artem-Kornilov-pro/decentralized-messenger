@@ -18,13 +18,18 @@ BASE=http://localhost:8080
 
 - All request and response bodies are JSON.
 - **Binary fields are base64-encoded strings** in JSON. This applies to
-  `public_key`, `private_key`, `content_key`, `photo`, and a message's
-  `content`, `public_key`, and `signature`.
-- Keys and content keys are generated client-side in real deployments. The
-  `/keys` and `/keys/content` endpoints exist only as a local convenience —
-  **never send a real private key to a server.**
+  `public_key`, `content_key`, and a message's `content`, `public_key`, and
+  `signature`.
+- **Clients sign locally and never send a private key to a server.** Build a
+  message with `models.NewMessage(...)`, sign it with `crypto.SignMessage`,
+  then POST the result to `/messages`, `/photos`, or `/videos` — see those
+  sections below for a worked example. The `/keys` and `/keys/content`
+  endpoints exist only as a local convenience for minting test identities;
+  they are unrelated to sending and never used by the send endpoints.
 - `chatID` is any string you choose; chats are created implicitly on first
-  message.
+  message. The `chat_id` you signed must match the `chatID` in the URL — the
+  server binds it from the path, so a message signed for a different chat
+  fails verification (`422`).
 
 ## Endpoints
 
@@ -33,14 +38,16 @@ BASE=http://localhost:8080
 | `GET`  | `/healthz` | Liveness probe |
 | `POST` | `/keys` | Generate an Ed25519 key pair (dev only) |
 | `POST` | `/keys/content` | Generate a symmetric content key (dev only) |
-| `POST` | `/chats/{chatID}/messages` | Sign and append a text message |
+| `POST` | `/chats/{chatID}/messages` | Append a pre-signed text message |
 | `GET`  | `/chats/{chatID}/messages` | List history (paginated) |
 | `GET`  | `/chats/{chatID}/messages/{sequence}` | Fetch one message by sequence |
 | `GET`  | `/chats/{chatID}/messages/{sequence}/proof` | Merkle inclusion proof |
 | `GET`  | `/chats/{chatID}/messages/{sequence}/verify` | Verify one message |
-| `POST` | `/chats/{chatID}/photos` | Encrypt, sign, and append a photo |
+| `POST` | `/chats/{chatID}/photos` | Append a pre-signed, encrypted photo |
+| `POST` | `/chats/{chatID}/videos` | Append a pre-signed, encrypted video |
 | `GET`  | `/chats/{chatID}/verify` | Verify full chat integrity |
 | `GET`  | `/chats/{chatID}/sync` | Catch-up bundle for a new participant |
+| `GET`  | `/chats/{chatID}/ws` | WebSocket stream of new-entry/snapshot events |
 
 ---
 
@@ -73,18 +80,23 @@ curl -s -X POST $BASE/keys/content
 
 ### `POST /chats/{chatID}/messages`
 
-Sign a plain-text message and append it. The body is stored **as-is** (not
-encrypted) — see the photo flow for encrypted content.
+Append a text message you have already signed locally. The body is stored
+**as-is** (not encrypted) — see the photo/video flow for encrypted content.
 
-Request fields: `sender_id`, `public_key`, `private_key`, `text`.
+The request body is a complete `SignedMessage` (see the response shape
+below): `schema_version`, `message_id`, `chat_id`, `sender_id`, `content`
+(base64), `content_type`, `filename` (optional), `encrypted`, `timestamp`,
+`public_key`, and `signature` — all base64 for binary fields. Since
+`curl`/`jq` cannot compute an Ed25519 signature, build and sign it in Go:
 
-```bash
-# Generate a key pair and send a message in one go (jq assembles the body).
-curl -s -X POST $BASE/keys > keys.json
+```go
+priv, pub, _ := crypto.GenerateKeyPair() // a real client persists this key pair locally
 
-jq -n --argjson k "$(cat keys.json)" \
-  '{sender_id:"alice", public_key:$k.public_key, private_key:$k.private_key, text:"hello"}' \
-| curl -s -X POST $BASE/chats/demo/messages -H 'Content-Type: application/json' -d @-
+msg := models.NewMessage("demo", "alice", pub, []byte("hello"), models.ContentTypeText, "", false)
+msg = crypto.SignMessage(msg, priv)
+
+body, _ := json.Marshal(msg)
+http.Post(BASE+"/chats/demo/messages", "application/json", bytes.NewReader(body))
 ```
 
 Response `201 Created` — a log entry:
@@ -178,31 +190,47 @@ curl -s $BASE/chats/demo/messages/0/verify
 
 ### `POST /chats/{chatID}/photos`
 
-Encrypt a photo with the chat's content key, sign the ciphertext, and append it.
-The server stores and signs **only ciphertext** — it never sees the content key.
+Encrypt a photo with the chat's content key, sign the ciphertext locally, and
+append it. The server stores and signs **only ciphertext** — it never sees the
+content key (or a private key). Plaintext is capped at 10 MiB.
 
-Request fields: `sender_id`, `public_key`, `private_key`, `content_key`,
-`photo` (raw bytes, base64), `content_type` (e.g. `image/jpeg`), `filename`
-(optional). Plaintext is capped at 10 MiB.
+```go
+contentKey, _ := crypto.NewContentKey() // shared with chat participants out of band
+ciphertext, _ := crypto.Encrypt(contentKey, photoBytes)
 
-```bash
-curl -s -X POST $BASE/keys > keys.json
-curl -s -X POST $BASE/keys/content > ckey.json
+msg := models.NewMessage("demo", "alice", pub, ciphertext, "image/jpeg", "cat.jpg", true)
+msg = crypto.SignMessage(msg, priv)
 
-# Build the request body: base64 the image into the `photo` field.
-jq -n \
-  --argjson k "$(cat keys.json)" \
-  --argjson c "$(cat ckey.json)" \
-  --arg photo "$(base64 -w0 cat.jpg)" \
-  '{sender_id:"alice", public_key:$k.public_key, private_key:$k.private_key,
-    content_key:$c.content_key, photo:$photo, content_type:"image/jpeg", filename:"cat.jpg"}' \
-| curl -s -X POST $BASE/chats/demo/photos -H 'Content-Type: application/json' -d @-
+body, _ := json.Marshal(msg)
+http.Post(BASE+"/chats/demo/photos", "application/json", bytes.NewReader(body))
 ```
 
 Response `201 Created` — a log entry whose `message.encrypted` is `true` and
 `message.content` is the ciphertext. To read the photo back, a client fetches
 the message and decrypts `content` with the same `content_key` (AES-256-GCM,
 nonce prepended). The server cannot do this for you by design.
+
+### `POST /chats/{chatID}/videos`
+
+Identical to `/photos` — encrypt, sign, and append — but for video
+attachments, with `content_type` set to the video's MIME type (e.g.
+`video/mp4`). Plaintext is capped at 50 MiB.
+
+---
+
+### `GET /chats/{chatID}/ws`
+
+Upgrades to a WebSocket and pushes a small JSON event for every new entry or
+sealed snapshot in `chatID`, so clients don't have to poll `GET
+/chats/{chatID}/messages`. Events are a notification only — fetch the actual
+message via the REST endpoints above.
+
+```json
+{"kind":"entry_appended","chat_id":"demo","sequence":3,"entry_hash":"…"}
+```
+
+The server pings the connection periodically to keep it alive through
+proxies; clients don't need to send anything.
 
 ---
 

@@ -6,7 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	gorillaws "github.com/gorilla/websocket"
+
+	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/broker"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/chatlog"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/crypto"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/merkle"
@@ -20,28 +24,66 @@ func newTestServer() http.Handler {
 	return NewServer(svc).Handler()
 }
 
-// sendText posts a signed text message and returns the created entry.
+// sendText signs a text message client-side and posts it, returning the
+// created entry.
 func sendText(t *testing.T, h http.Handler, chatID, text string) models.LogEntry {
 	t.Helper()
 	priv, pub, err := crypto.GenerateKeyPair()
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(sendRequest{
-		SenderID:   "alice",
-		PublicKey:  pub,
-		PrivateKey: priv,
-		Text:       text,
-	})
+	msg := models.NewMessage(chatID, "alice", pub, []byte(text), models.ContentTypeText, "", false)
+	msg = crypto.SignMessage(msg, priv)
+	return postMessage(t, h, "/chats/"+chatID+"/messages", msg, http.StatusCreated)
+}
+
+// sendAttachment signs an encrypted attachment client-side and posts it to
+// path, returning the response status so callers can assert on rejections.
+func sendAttachment(t *testing.T, h http.Handler, path, chatID string, contentType, filename string, data []byte) (models.LogEntry, int) {
+	t.Helper()
+	priv, pub, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contentKey, err := crypto.NewContentKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciphertext, err := crypto.Encrypt(contentKey, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := models.NewMessage(chatID, "alice", pub, ciphertext, contentType, filename, true)
+	msg = crypto.SignMessage(msg, priv)
+
+	body, _ := json.Marshal(msg)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/chats/"+chatID+"/messages", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
 	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("send: want 201, got %d: %s", rec.Code, rec.Body)
+
+	var entry models.LogEntry
+	if rec.Code == http.StatusCreated {
+		if err := json.Unmarshal(rec.Body.Bytes(), &entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return entry, rec.Code
+}
+
+func postMessage(t *testing.T, h http.Handler, path string, msg models.SignedMessage, wantStatus int) models.LogEntry {
+	t.Helper()
+	body, _ := json.Marshal(msg)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+	h.ServeHTTP(rec, req)
+	if rec.Code != wantStatus {
+		t.Fatalf("post %s: want %d, got %d: %s", path, wantStatus, rec.Code, rec.Body)
 	}
 	var entry models.LogEntry
-	if err := json.Unmarshal(rec.Body.Bytes(), &entry); err != nil {
-		t.Fatal(err)
+	if wantStatus == http.StatusCreated {
+		if err := json.Unmarshal(rec.Body.Bytes(), &entry); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return entry
 }
@@ -161,5 +203,150 @@ func TestGetMessageBadSequence(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/chats/c1/messages/abc", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestSendRejectsMissingSignature(t *testing.T) {
+	h := newTestServer()
+	priv, pub, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := models.NewMessage("c1", "alice", pub, []byte("hi"), models.ContentTypeText, "", false)
+	_ = priv // intentionally not signing
+
+	body, _ := json.Marshal(msg)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/chats/c1/messages", bytes.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for unsigned message, got %d: %s", rec.Code, rec.Body)
+	}
+}
+
+func TestSendRejectsMessageSignedForAnotherChat(t *testing.T) {
+	h := newTestServer()
+	priv, pub, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := models.NewMessage("chat-a", "alice", pub, []byte("hi"), models.ContentTypeText, "", false)
+	msg = crypto.SignMessage(msg, priv)
+
+	// POSTed to chat-b: the handler rebinds chat_id from the path, so the
+	// signature (computed over chat-a) no longer verifies.
+	body, _ := json.Marshal(msg)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/chats/chat-b/messages", bytes.NewReader(body)))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422 for cross-chat signature, got %d: %s", rec.Code, rec.Body)
+	}
+}
+
+func TestSendPhoto(t *testing.T) {
+	h := newTestServer()
+	photo := []byte("\xff\xd8\xff\xe0 fake JPEG bytes")
+
+	entry, status := sendAttachment(t, h, "/chats/c1/photos", "c1", "image/jpeg", "cat.jpg", photo)
+	if status != http.StatusCreated {
+		t.Fatalf("want 201, got %d", status)
+	}
+	if !entry.Message.Encrypted || entry.Message.ContentType != "image/jpeg" {
+		t.Fatalf("unexpected message: %+v", entry.Message)
+	}
+}
+
+func TestSendPhotoRejectsOversize(t *testing.T) {
+	h := newTestServer()
+	big := make([]byte, service.MaxPhotoBytes+1)
+
+	_, status := sendAttachment(t, h, "/chats/c1/photos", "c1", "image/png", "", big)
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422 for oversize photo, got %d", status)
+	}
+}
+
+func TestSendVideo(t *testing.T) {
+	h := newTestServer()
+	video := []byte("\x00\x00\x00\x18ftypmp42 fake MP4 bytes")
+
+	entry, status := sendAttachment(t, h, "/chats/c1/videos", "c1", "video/mp4", "clip.mp4", video)
+	if status != http.StatusCreated {
+		t.Fatalf("want 201, got %d", status)
+	}
+	if !entry.Message.Encrypted || entry.Message.ContentType != "video/mp4" {
+		t.Fatalf("unexpected message: %+v", entry.Message)
+	}
+}
+
+func TestSendVideoRejectsOversize(t *testing.T) {
+	h := newTestServer()
+	big := make([]byte, service.MaxVideoBytes+1)
+
+	_, status := sendAttachment(t, h, "/chats/c1/videos", "c1", "video/mp4", "", big)
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422 for oversize video, got %d", status)
+	}
+}
+
+func TestStreamDeliversEntryAppendedEvent(t *testing.T) {
+	svc := service.New(chatlog.New(storage.NewInMemoryStorage(), chatlog.WithBroker(broker.NewInMemory())))
+	srv := httptest.NewServer(NewServer(svc).Handler())
+	defer srv.Close()
+
+	wsURL := "ws" + srv.URL[len("http"):] + "/chats/c1/ws"
+	conn, _, err := gorillaws.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial ws: %v", err)
+	}
+	defer conn.Close()
+
+	// Send a message via the normal HTTP path once the socket is open.
+	go func() {
+		priv, pub, _ := crypto.GenerateKeyPair()
+		msg := models.NewMessage("c1", "alice", pub, []byte("hi"), models.ContentTypeText, "", false)
+		msg = crypto.SignMessage(msg, priv)
+		body, _ := json.Marshal(msg)
+		http.Post(srv.URL+"/chats/c1/messages", "application/json", bytes.NewReader(body))
+	}()
+
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	var evt struct {
+		Kind      string `json:"kind"`
+		ChatID    string `json:"chat_id"`
+		Sequence  uint64 `json:"sequence"`
+		EntryHash string `json:"entry_hash"`
+	}
+	if err := conn.ReadJSON(&evt); err != nil {
+		t.Fatalf("read event: %v", err)
+	}
+	if evt.Kind != "entry_appended" || evt.ChatID != "c1" || evt.EntryHash == "" {
+		t.Fatalf("unexpected event: %+v", evt)
+	}
+}
+
+func TestStreamIgnoresOtherChats(t *testing.T) {
+	svc := service.New(chatlog.New(storage.NewInMemoryStorage(), chatlog.WithBroker(broker.NewInMemory())))
+	srv := httptest.NewServer(NewServer(svc).Handler())
+	defer srv.Close()
+
+	wsURL := "ws" + srv.URL[len("http"):] + "/chats/c1/ws"
+	conn, _, err := gorillaws.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial ws: %v", err)
+	}
+	defer conn.Close()
+
+	priv, pub, _ := crypto.GenerateKeyPair()
+	msg := models.NewMessage("other-chat", "alice", pub, []byte("hi"), models.ContentTypeText, "", false)
+	msg = crypto.SignMessage(msg, priv)
+	body, _ := json.Marshal(msg)
+	if resp, err := http.Post(srv.URL+"/chats/other-chat/messages", "application/json", bytes.NewReader(body)); err != nil || resp.StatusCode != http.StatusCreated {
+		t.Fatalf("seed message: err=%v resp=%v", err, resp)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	var evt map[string]any
+	if err := conn.ReadJSON(&evt); err == nil {
+		t.Fatalf("expected no event for a different chat, got %+v", evt)
 	}
 }

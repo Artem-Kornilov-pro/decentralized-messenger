@@ -37,14 +37,15 @@
 ## Data Flow
 
 ```
-Client ──► API (net/http)
+Client
+  ├──► crypto.SignMessage()          # Ed25519 signature, computed locally
+  └──► API (net/http) ──► service.Submit()
              │
-             ├──► crypto.SignMessage()       # Ed25519 signature
-             ├──► chatlog.Append()           # append-only log entry (chained hash)
+             ├──► chatlog.Append()           # re-verify signature; append-only log entry (chained hash)
              ├──► merkle.Root()              # update Merkle tree (every 100 msgs)
              ├──► storage.Storage            # persist log + snapshots (ScyllaDB)
              ├──► cache (Redis)              # cache Merkle root
-             └──► broker (RabbitMQ)          # notify other nodes
+             └──► broker (RabbitMQ) ──► WebSocket (/chats/{chatID}/ws) ──► subscribed clients
 ```
 
 ## Snapshot Cycle
