@@ -15,6 +15,7 @@ import (
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/crypto"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/merkle"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/models"
+	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/ratelimit"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/service"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/storage"
 )
@@ -348,5 +349,62 @@ func TestStreamIgnoresOtherChats(t *testing.T) {
 	var evt map[string]any
 	if err := conn.ReadJSON(&evt); err == nil {
 		t.Fatalf("expected no event for a different chat, got %+v", evt)
+	}
+}
+
+func newRateLimitedTestServer(burst int) http.Handler {
+	svc := service.New(chatlog.New(storage.NewInMemoryStorage()))
+	limiter := ratelimit.New(1, burst, time.Minute)
+	return NewServer(svc, WithRateLimit(limiter)).Handler()
+}
+
+func getWithIP(h http.Handler, path, remoteAddr string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.RemoteAddr = remoteAddr
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestRateLimitReturns429WhenBurstExceeded(t *testing.T) {
+	h := newRateLimitedTestServer(2)
+
+	for i := 0; i < 2; i++ {
+		rec := getWithIP(h, "/chats/c1/messages", "203.0.113.1:1111")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %d within burst: want 200, got %d", i, rec.Code)
+		}
+	}
+	rec := getWithIP(h, "/chats/c1/messages", "203.0.113.1:1111")
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("want 429 beyond burst, got %d: %s", rec.Code, rec.Body)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Fatal("expected a Retry-After header on 429")
+	}
+}
+
+func TestRateLimitIsPerClientIP(t *testing.T) {
+	h := newRateLimitedTestServer(1)
+
+	if rec := getWithIP(h, "/chats/c1/messages", "203.0.113.1:1111"); rec.Code != http.StatusOK {
+		t.Fatalf("client A's first request: want 200, got %d", rec.Code)
+	}
+	if rec := getWithIP(h, "/chats/c1/messages", "203.0.113.2:2222"); rec.Code != http.StatusOK {
+		t.Fatalf("client B's first request: want 200, got %d (should have its own bucket)", rec.Code)
+	}
+	if rec := getWithIP(h, "/chats/c1/messages", "203.0.113.1:1111"); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("client A's second request: want 429, got %d", rec.Code)
+	}
+}
+
+func TestHealthzExemptFromRateLimit(t *testing.T) {
+	h := newRateLimitedTestServer(1)
+
+	for i := 0; i < 5; i++ {
+		rec := getWithIP(h, "/healthz", "203.0.113.1:1111")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("healthz request %d: want 200, got %d", i, rec.Code)
+		}
 	}
 }
