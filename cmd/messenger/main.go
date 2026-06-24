@@ -22,6 +22,7 @@ import (
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/chatlog"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/crypto"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/models"
+	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/ratelimit"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/service"
 	"github.com/Artem-Kornilov-pro/decentralized-messenger/internal/storage"
 )
@@ -38,11 +39,16 @@ const (
 	// attachment) inflates ~1.37x under base64 and travels with JSON envelope
 	// fields, so allow generous headroom.
 	maxRequestBytes = 72 << 20
+	// rateLimitIdleTimeout bounds memory growth on a long-running node: a
+	// client IP's bucket is forgotten once it's been idle this long.
+	rateLimitIdleTimeout = 10 * time.Minute
 )
 
 func main() {
 	addr := flag.String("addr", ":8080", "HTTP listen address")
 	demo := flag.Bool("demo", false, "run an in-process demonstration and exit")
+	rateLimitRPS := flag.Float64("rate-limit-rps", 5, "requests per second allowed per client IP; 0 disables rate limiting")
+	rateLimitBurst := flag.Int("rate-limit-burst", 20, "burst size for the per-IP rate limiter")
 	flag.Parse()
 
 	lg := chatlog.New(buildStorage(), chatlog.WithCache(buildCache()), chatlog.WithBroker(buildBroker()))
@@ -55,7 +61,15 @@ func main() {
 		return
 	}
 
-	if err := serve(*addr, api.NewServer(svc).Handler()); err != nil {
+	var opts []api.Option
+	if *rateLimitRPS > 0 {
+		opts = append(opts, api.WithRateLimit(ratelimit.New(*rateLimitRPS, *rateLimitBurst, rateLimitIdleTimeout)))
+		log.Printf("rate limit: %.1f req/s, burst %d, per client IP", *rateLimitRPS, *rateLimitBurst)
+	} else {
+		log.Print("rate limit: disabled")
+	}
+
+	if err := serve(*addr, api.NewServer(svc, opts...).Handler()); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
 }
