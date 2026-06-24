@@ -272,7 +272,15 @@ Errors are returned as `{"error": "message"}` with an appropriate status code:
 | `404 Not Found` | Message does not exist |
 | `409 Conflict` | No snapshot yet covers the requested message |
 | `422 Unprocessable Entity` | Invalid signature, unsupported schema version, oversized photo, etc. |
+| `429 Too Many Requests` | Client IP exceeded its rate limit; see `Retry-After` |
 | `500 Internal Server Error` | Unexpected server failure |
+
+## Rate limiting
+
+Every endpoint except `/healthz` is throttled per client IP with a token
+bucket (default `5` requests/second, burst `20`, configurable via the node's
+`-rate-limit-rps`/`-rate-limit-burst` flags). Exceeding it returns `429` with
+a `Retry-After` header; back off and retry.
 
 ## Schema version
 
