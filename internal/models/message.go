@@ -64,8 +64,15 @@ func NewMessage(chatID, senderID string, publicKey, content []byte, contentType,
 		ContentType:   contentType,
 		Filename:      filename,
 		Encrypted:     encrypted,
-		Timestamp:     time.Now().UTC(),
-		PublicKey:     publicKey,
+		// Truncated to millisecond precision because the ScyllaDB storage
+		// adapter persists Timestamp in a CQL `timestamp` column, which is
+		// millisecond-precision. Signing a sub-millisecond value here would
+		// make the signed payload unreproducible after any storage round
+		// trip, since SigningPayload encodes Timestamp with nanosecond
+		// resolution (RFC3339Nano) — every message would fail verification
+		// on read-back from a real ScyllaDB node.
+		Timestamp: time.Now().UTC().Truncate(time.Millisecond),
+		PublicKey: publicKey,
 	}
 }
 
