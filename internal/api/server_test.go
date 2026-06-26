@@ -352,6 +352,20 @@ func TestStreamIgnoresOtherChats(t *testing.T) {
 	}
 }
 
+func TestStreamAcceptsCrossOriginHandshake(t *testing.T) {
+	svc := service.New(chatlog.New(storage.NewInMemoryStorage(), chatlog.WithBroker(broker.NewInMemory())))
+	srv := httptest.NewServer(NewServer(svc).Handler())
+	defer srv.Close()
+
+	wsURL := "ws" + srv.URL[len("http"):] + "/chats/c1/ws"
+	header := http.Header{"Origin": {"http://a-completely-different-origin.example:9999"}}
+	conn, resp, err := gorillaws.DefaultDialer.Dial(wsURL, header)
+	if err != nil {
+		t.Fatalf("dial ws with foreign Origin: %v (status %v)", err, resp)
+	}
+	defer conn.Close()
+}
+
 func newRateLimitedTestServer(burst int) http.Handler {
 	svc := service.New(chatlog.New(storage.NewInMemoryStorage()))
 	limiter := ratelimit.New(1, burst, time.Minute)
