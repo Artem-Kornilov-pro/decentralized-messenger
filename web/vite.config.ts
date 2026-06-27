@@ -15,7 +15,11 @@ export default defineConfig({
   },
   // Default environment is Node (vitest's default) so the WebCrypto-backed
   // ed25519 tests use Node's native crypto.subtle. Tests that need
-  // localStorage opt into jsdom per-file via a `@vitest-environment jsdom`
-  // pragma — jsdom's crypto.subtle runs typed arrays in a different realm,
-  // which breaks @noble/ed25519's instanceof checks if applied globally.
+  // localStorage/DOM opt into jsdom per-file via a `@vitest-environment
+  // jsdom` pragma — jsdom's crypto.subtle runs typed arrays in a different
+  // realm, which breaks @noble/ed25519's instanceof checks if applied
+  // globally.
+  test: {
+    setupFiles: ['./src/setupTests.ts'],
+  },
 })
