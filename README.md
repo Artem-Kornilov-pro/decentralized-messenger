@@ -197,6 +197,24 @@ docker compose up
 The `messenger` service is pre-wired to the ScyllaDB, Redis, and RabbitMQ
 containers via the environment variables above.
 
+## Frontend
+
+A React/TypeScript SPA in [`web/`](web/) — generate a local Ed25519 identity,
+join a chat by ID, and send/receive text messages live over `/ws`. It signs
+every message client-side (see "Client-side signing" below); the server
+never sees a private key.
+
+```bash
+cd web
+npm install
+npm run dev    # http://localhost:5173, proxied to the API on :8080
+```
+
+Run a node first (`make run` or the Docker stack above) — the dev server
+proxies `/chats`, `/keys`, and `/healthz` to `localhost:8080`. Photo/video
+attachments and proof/verify UI aren't built yet; see `web/src/chat` and
+`web/src/identity` for the current scope.
+
 ## Security Model
 
 Every message in the system satisfies three cryptographic properties:

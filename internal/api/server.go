@@ -23,7 +23,15 @@ import (
 // connection alive through intermediary proxies.
 const pingInterval = 20 * time.Second
 
-var upgrader = websocket.Upgrader{}
+// CheckOrigin is permissive: this project has no auth/session model to
+// protect (the same trust boundary already accepted for chatID access, and
+// documented for X-Forwarded-For in the rate limiter), and a browser
+// frontend served from a different origin/port than the API (e.g. a Vite
+// dev server) must be able to open this connection. Revisit if this node is
+// ever exposed beyond trusted/local deployments.
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
 
 // Pagination defaults for the history endpoint.
 const (

@@ -1,0 +1,74 @@
+.app {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 1rem;
+  font-family: system-ui, sans-serif;
+}
+
+.identity-gate {
+  max-width: 420px;
+  margin: 4rem auto;
+  padding: 1rem;
+  font-family: system-ui, sans-serif;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.join-chat,
+.composer {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.join-chat input,
+.composer input {
+  flex: 1;
+}
+
+.chat-status {
+  font-size: 0.85rem;
+  color: #666;
+  margin-bottom: 0.5rem;
+}
+
+.chat-error {
+  color: #c0392b;
+}
+
+.message-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.message-list li {
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.4rem;
+  background: #f1f1f1;
+  align-self: flex-start;
+  max-width: 80%;
+}
+
+.message-list li.mine {
+  align-self: flex-end;
+  background: #d6e9ff;
+}
+
+.message-list .sender {
+  display: block;
+  font-size: 0.7rem;
+  color: #666;
+}
