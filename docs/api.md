@@ -232,6 +232,10 @@ message via the REST endpoints above.
 The server pings the connection periodically to keep it alive through
 proxies; clients don't need to send anything.
 
+The handshake accepts any `Origin` — there's no auth/session model this would
+protect, and a browser frontend served from a different origin/port than the
+API (e.g. a local dev server) needs to be able to open this connection.
+
 ---
 
 ### `GET /chats/{chatID}/verify`
