@@ -198,6 +198,78 @@ func TestVerifyMessageEndpoint(t *testing.T) {
 	}
 }
 
+func TestVerifyEndpoint(t *testing.T) {
+	h := newTestServer()
+	sendText(t, h, "c1", "hello")
+	sendText(t, h, "c1", "world")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/chats/c1/verify", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body)
+	}
+	var res chatlog.VerifyResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if !res.Valid || res.Entries != 2 {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+
+	// An empty chat is trivially valid with zero entries.
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/chats/empty/verify", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 for an empty chat, got %d", rec.Code)
+	}
+	res = chatlog.VerifyResult{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if !res.Valid || res.Entries != 0 {
+		t.Fatalf("unexpected result for empty chat: %+v", res)
+	}
+}
+
+func TestSyncEndpoint(t *testing.T) {
+	h := newTestServer()
+
+	// Before any snapshot is sealed, sync returns every entry and no snapshot.
+	sent := sendText(t, h, "c1", "hello")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/chats/c1/sync", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body)
+	}
+	var bundle chatlog.SyncBundle
+	if err := json.Unmarshal(rec.Body.Bytes(), &bundle); err != nil {
+		t.Fatal(err)
+	}
+	if bundle.Snapshot != nil {
+		t.Fatalf("expected no snapshot yet, got %+v", bundle.Snapshot)
+	}
+	if len(bundle.NewEntries) != 1 || bundle.CurrentHash != sent.EntryHash {
+		t.Fatalf("unexpected bundle: %+v", bundle)
+	}
+
+	// Fill the window to seal a snapshot; sync now reports it plus the tail.
+	for i := 1; i < models.SnapshotInterval; i++ {
+		sendText(t, h, "c1", "msg")
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/chats/c1/sync", nil))
+	bundle = chatlog.SyncBundle{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &bundle); err != nil {
+		t.Fatal(err)
+	}
+	if bundle.Snapshot == nil {
+		t.Fatal("expected a sealed snapshot after filling the window")
+	}
+	if len(bundle.NewEntries) != 0 {
+		t.Fatalf("expected no entries after the snapshot's tip, got %d", len(bundle.NewEntries))
+	}
+}
+
 func TestGetMessageBadSequence(t *testing.T) {
 	h := newTestServer()
 	rec := httptest.NewRecorder()
