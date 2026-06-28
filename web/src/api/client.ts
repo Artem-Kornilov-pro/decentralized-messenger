@@ -24,14 +24,32 @@ async function parseOrThrow<T>(resp: Response): Promise<T> {
   return resp.json()
 }
 
-/** POSTs a pre-signed message to /chats/{chatID}/messages. */
-export async function sendText(chatId: string, msg: SignedMessageJSON): Promise<LogEntry> {
-  const resp = await fetch(`/chats/${encodeURIComponent(chatId)}/messages`, {
+async function postSignedMessage(
+  chatId: string,
+  resource: 'messages' | 'photos' | 'videos',
+  msg: SignedMessageJSON,
+): Promise<LogEntry> {
+  const resp = await fetch(`/chats/${encodeURIComponent(chatId)}/${resource}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(msg),
   })
   return parseOrThrow<LogEntry>(resp)
+}
+
+/** POSTs a pre-signed message to /chats/{chatID}/messages. */
+export function sendText(chatId: string, msg: SignedMessageJSON): Promise<LogEntry> {
+  return postSignedMessage(chatId, 'messages', msg)
+}
+
+/** POSTs a pre-signed, encrypted photo to /chats/{chatID}/photos. */
+export function sendPhoto(chatId: string, msg: SignedMessageJSON): Promise<LogEntry> {
+  return postSignedMessage(chatId, 'photos', msg)
+}
+
+/** POSTs a pre-signed, encrypted video to /chats/{chatID}/videos. */
+export function sendVideo(chatId: string, msg: SignedMessageJSON): Promise<LogEntry> {
+  return postSignedMessage(chatId, 'videos', msg)
 }
 
 /** Pages forward through a chat's history from sequence `from`. */
