@@ -44,6 +44,7 @@ function mockUseChat(overrides: Partial<ReturnType<typeof useChat>> = {}) {
     error: null,
     loadMore: vi.fn(),
     send: vi.fn().mockResolvedValue(undefined),
+    sendAttachment: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   })
 }

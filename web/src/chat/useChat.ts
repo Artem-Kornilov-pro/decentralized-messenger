@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchHistory, sendText } from '../api/client'
+import { fetchHistory, sendPhoto, sendText, sendVideo } from '../api/client'
 import { openStream } from '../api/stream'
 import type { LogEntry } from '../api/types'
+import { encrypt } from '../crypto/aesgcm'
 import { sign } from '../crypto/ed25519'
 import { CONTENT_TYPE_TEXT, newMessage, signingPayload, toWireFormat } from '../crypto/signedMessage'
 import type { Identity } from '../identity/types'
 
 const PAGE_SIZE = 50
+
+// Mirrors internal/service.MaxPhotoBytes/MaxVideoBytes — checked client-side
+// for fast feedback; the server enforces the real limit regardless.
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024
+const MAX_VIDEO_BYTES = 50 * 1024 * 1024
 
 export function useChat(chatId: string, identity: Identity) {
   const [messages, setMessages] = useState<LogEntry[]>([])
@@ -90,5 +96,40 @@ export function useChat(chatId: string, identity: Identity) {
     [chatId, identity, appendEntries],
   )
 
-  return { messages, caughtUp, error, loadMore, send }
+  const sendAttachment = useCallback(
+    async (file: File, contentKey: Uint8Array) => {
+      try {
+        const isImage = file.type.startsWith('image/')
+        const isVideo = file.type.startsWith('video/')
+        if (!isImage && !isVideo) {
+          throw new Error(`unsupported file type: ${file.type || 'unknown'}`)
+        }
+        const maxBytes = isImage ? MAX_PHOTO_BYTES : MAX_VIDEO_BYTES
+        if (file.size > maxBytes) {
+          throw new Error(`file exceeds ${maxBytes} bytes`)
+        }
+
+        const plaintext = new Uint8Array(await file.arrayBuffer())
+        const ciphertext = await encrypt(contentKey, plaintext)
+        const msg = newMessage(
+          chatId,
+          identity.senderId,
+          identity.publicKey,
+          ciphertext,
+          file.type,
+          file.name,
+          true,
+        )
+        const signature = await sign(signingPayload(msg), identity.secretKey)
+        const wire = toWireFormat(msg, signature)
+        const entry = isImage ? await sendPhoto(chatId, wire) : await sendVideo(chatId, wire)
+        appendEntries([entry])
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
+      }
+    },
+    [chatId, identity, appendEntries],
+  )
+
+  return { messages, caughtUp, error, loadMore, send, sendAttachment }
 }
