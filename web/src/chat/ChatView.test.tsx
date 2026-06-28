@@ -4,11 +4,18 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatView } from './ChatView'
 import { useChat } from './useChat'
+import { useContentKey } from './useContentKey'
 import type { LogEntry } from '../api/types'
 import type { Identity } from '../identity/types'
 
 vi.mock('./useChat', () => ({
   useChat: vi.fn(),
+}))
+vi.mock('./useContentKey', () => ({
+  useContentKey: vi.fn(),
+}))
+vi.mock('./MediaMessage', () => ({
+  MediaMessage: () => <div data-testid="media-message" />,
 }))
 
 const identity: Identity = {
@@ -49,8 +56,19 @@ function mockUseChat(overrides: Partial<ReturnType<typeof useChat>> = {}) {
   })
 }
 
+function mockUseContentKey(overrides: Partial<ReturnType<typeof useContentKey>> = {}) {
+  vi.mocked(useContentKey).mockReturnValue({
+    contentKey: null,
+    generate: vi.fn(),
+    setFromBase64: vi.fn(),
+    clear: vi.fn(),
+    ...overrides,
+  })
+}
+
 beforeEach(() => {
   vi.mocked(useChat).mockReset()
+  mockUseContentKey()
 })
 
 describe('ChatView', () => {
@@ -122,5 +140,39 @@ describe('ChatView', () => {
 
     await userEvent.type(screen.getByPlaceholderText('Type a message'), 'hi')
     expect(sendButton).toBeEnabled()
+  })
+
+  it('disables Attach when there is no content key', () => {
+    mockUseChat()
+    mockUseContentKey({ contentKey: null })
+    render(<ChatView chatId="c1" identity={identity} />)
+
+    expect(screen.getByRole('button', { name: /attach/i })).toBeDisabled()
+  })
+
+  it('sends a selected file via sendAttachment when a content key is set', async () => {
+    const sendAttachment = vi.fn().mockResolvedValue(undefined)
+    const contentKey = new Uint8Array(32).fill(1)
+    mockUseChat({ sendAttachment })
+    mockUseContentKey({ contentKey })
+    const { container } = render(<ChatView chatId="c1" identity={identity} />)
+
+    expect(screen.getByRole('button', { name: /attach/i })).toBeEnabled()
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+    const file = new File([new Uint8Array([1, 2, 3])], 'cat.jpg', { type: 'image/jpeg' })
+
+    await userEvent.upload(fileInput, file)
+
+    expect(sendAttachment).toHaveBeenCalledWith(file, contentKey)
+  })
+
+  it('renders media entries via MediaMessage instead of the decoded-text span', () => {
+    const photo = entry('alice', 'irrelevant', 0)
+    photo.message.content_type = 'image/jpeg'
+    mockUseChat({ messages: [photo] })
+
+    render(<ChatView chatId="c1" identity={identity} />)
+
+    expect(screen.getByTestId('media-message')).toBeInTheDocument()
   })
 })

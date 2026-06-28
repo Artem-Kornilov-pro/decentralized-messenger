@@ -72,3 +72,47 @@
   font-size: 0.7rem;
   color: #666;
 }
+
+.media-content {
+  display: block;
+  max-width: 100%;
+  max-height: 240px;
+  border-radius: 0.3rem;
+}
+
+.media-placeholder {
+  display: block;
+  font-style: italic;
+  color: #666;
+}
+
+.content-key-panel {
+  margin-bottom: 1rem;
+  padding: 0.5rem;
+  border: 1px solid #e0e0e0;
+  border-radius: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.content-key-current,
+.content-key-paste {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+
+.content-key-current input,
+.content-key-paste input {
+  flex: 1;
+  font-family: ui-monospace, monospace;
+}
+
+.content-key-missing {
+  margin: 0;
+  color: #666;
+}
+
+.content-key-error {
+  color: #c0392b;
+  margin: 0.4rem 0 0;
+}
