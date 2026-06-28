@@ -200,9 +200,15 @@ containers via the environment variables above.
 ## Frontend
 
 A React/TypeScript SPA in [`web/`](web/) — generate a local Ed25519 identity,
-join a chat by ID, and send/receive text messages live over `/ws`. It signs
-every message client-side (see "Client-side signing" below); the server
-never sees a private key.
+join a chat by ID, and send/receive text, photo, and video messages live
+over `/ws`. It signs every message client-side (see "Client-side signing"
+below); the server never sees a private key.
+
+Photos/videos are AES-256-GCM-encrypted with a per-chat content key (see
+"Encrypted content" below) that the frontend generates and stores locally —
+participants share it out of band (copy/paste, via the chat's content-key
+panel). Without a content key, text still works but media can't be sent or
+viewed.
 
 ```bash
 cd web
@@ -211,9 +217,9 @@ npm run dev    # http://localhost:5173, proxied to the API on :8080
 ```
 
 Run a node first (`make run` or the Docker stack above) — the dev server
-proxies `/chats`, `/keys`, and `/healthz` to `localhost:8080`. Photo/video
-attachments and proof/verify UI aren't built yet; see `web/src/chat` and
-`web/src/identity` for the current scope.
+proxies `/chats`, `/keys`, and `/healthz` to `localhost:8080`. Proof/verify
+UI isn't built yet; see `web/src/chat` and `web/src/identity` for the
+current scope.
 
 ## Security Model
 

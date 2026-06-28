@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiRequestError, fetchHistory, sendText } from './client'
+import { ApiRequestError, fetchHistory, sendPhoto, sendText, sendVideo } from './client'
 import type { SignedMessageJSON } from '../crypto/signedMessage'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -29,6 +29,30 @@ describe('api client', () => {
     expect(url).toBe('/chats/demo/messages')
     expect(init?.method).toBe('POST')
     expect(JSON.parse(init?.body as string)).toEqual(msg)
+  })
+
+  it('POSTs a signed photo to /chats/{chatID}/photos', async () => {
+    const entry = { sequence: 1, message: {}, prev_hash: '', entry_hash: 'photo-hash' }
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(entry, 201))
+
+    const msg = { chat_id: 'demo' } as unknown as SignedMessageJSON
+    const got = await sendPhoto('demo', msg)
+
+    expect(got.entry_hash).toBe('photo-hash')
+    const [url] = vi.mocked(fetch).mock.calls[0]
+    expect(url).toBe('/chats/demo/photos')
+  })
+
+  it('POSTs a signed video to /chats/{chatID}/videos', async () => {
+    const entry = { sequence: 2, message: {}, prev_hash: '', entry_hash: 'video-hash' }
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(entry, 201))
+
+    const msg = { chat_id: 'demo' } as unknown as SignedMessageJSON
+    const got = await sendVideo('demo', msg)
+
+    expect(got.entry_hash).toBe('video-hash')
+    const [url] = vi.mocked(fetch).mock.calls[0]
+    expect(url).toBe('/chats/demo/videos')
   })
 
   it('fetches a history page with from/limit query params', async () => {

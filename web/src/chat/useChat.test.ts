@@ -2,9 +2,10 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChat } from './useChat'
-import { fetchHistory, sendText } from '../api/client'
+import { fetchHistory, sendPhoto, sendText, sendVideo } from '../api/client'
 import { openStream } from '../api/stream'
 import { sign } from '../crypto/ed25519'
+import { encrypt } from '../crypto/aesgcm'
 import type { Identity } from '../identity/types'
 import type { LogEntry } from '../api/types'
 import type { StreamEvent } from '../api/types'
@@ -12,19 +13,25 @@ import type { StreamEvent } from '../api/types'
 vi.mock('../api/client', () => ({
   fetchHistory: vi.fn(),
   sendText: vi.fn(),
+  sendPhoto: vi.fn(),
+  sendVideo: vi.fn(),
 }))
 vi.mock('../api/stream', () => ({
   openStream: vi.fn(),
 }))
-// useChat's send() signs via the real ed25519 module, which uses
-// crypto.subtle internally. jsdom's crypto.subtle runs typed arrays in a
-// different realm than @noble/ed25519 expects (see crypto/ed25519.ts's test
-// file for the same issue), so it's mocked here — signature *correctness* is
-// already covered by ed25519.test.ts and signedMessage.test.ts; this file
-// only cares about useChat's orchestration. Re-applied in beforeEach since
-// resetAllMocks (afterEach) would otherwise wipe this implementation too.
+// useChat's send()/sendAttachment() sign/encrypt via the real ed25519/aesgcm
+// modules, which use crypto.subtle internally. jsdom's crypto.subtle runs
+// typed arrays in a different realm than @noble/ed25519 expects (see
+// crypto/ed25519.ts's test file for the same issue), so both are mocked
+// here — correctness is already covered by ed25519.test.ts, aesgcm.test.ts,
+// and signedMessage.test.ts; this file only cares about useChat's own
+// orchestration. Re-applied in beforeEach since resetAllMocks (afterEach)
+// would otherwise wipe these implementations too.
 vi.mock('../crypto/ed25519', () => ({
   sign: vi.fn(),
+}))
+vi.mock('../crypto/aesgcm', () => ({
+  encrypt: vi.fn(),
 }))
 
 const identity: Identity = {
@@ -60,6 +67,9 @@ beforeEach(() => {
   streamHandlers = new Map()
   closeStream = vi.fn<() => void>()
   vi.mocked(sign).mockResolvedValue(new Uint8Array([9, 9, 9]))
+  vi.mocked(encrypt).mockImplementation((_key, plaintext) =>
+    Promise.resolve(new Uint8Array([...new Uint8Array(12), ...plaintext])),
+  )
 
   vi.mocked(openStream).mockImplementation((chatId, onEvent) => {
     streamHandlers.set(chatId, onEvent)
@@ -207,5 +217,93 @@ describe('useChat', () => {
     expect(closeStream).toHaveBeenCalled()
     await waitFor(() => expect(result.current.messages.map((e) => e.sequence)).toEqual([0]))
     await waitFor(() => expect(openStream).toHaveBeenLastCalledWith('c2', expect.any(Function)))
+  })
+
+  describe('sendAttachment', () => {
+    const contentKey = new Uint8Array(32).fill(4)
+
+    function makeFile(name: string, type: string, size: number): File {
+      return new File([new Uint8Array(size)], name, { type })
+    }
+
+    async function caughtUpHook() {
+      vi.mocked(fetchHistory).mockResolvedValueOnce({ messages: [], next_from: null })
+      const { result } = renderHook(() => useChat('c1', identity))
+      await waitFor(() => expect(result.current.caughtUp).toBe(true))
+      return result
+    }
+
+    it('encrypts and posts an image to /photos, appending the stored entry', async () => {
+      const result = await caughtUpHook()
+      const file = makeFile('cat.jpg', 'image/jpeg', 1024)
+      vi.mocked(sendPhoto).mockResolvedValueOnce(entry(0))
+
+      await act(() => result.current.sendAttachment(file, contentKey))
+
+      expect(encrypt).toHaveBeenCalledWith(contentKey, expect.any(Uint8Array))
+      expect(sendPhoto).toHaveBeenCalledTimes(1)
+      const [chatId, wire] = vi.mocked(sendPhoto).mock.calls[0]
+      expect(chatId).toBe('c1')
+      expect(wire.content_type).toBe('image/jpeg')
+      expect(wire.filename).toBe('cat.jpg')
+      expect(wire.encrypted).toBe(true)
+      expect(sendVideo).not.toHaveBeenCalled()
+      expect(result.current.messages).toHaveLength(1)
+    })
+
+    it('posts a video to /videos instead of /photos', async () => {
+      const result = await caughtUpHook()
+      const file = makeFile('clip.mp4', 'video/mp4', 1024)
+      vi.mocked(sendVideo).mockResolvedValueOnce(entry(0))
+
+      await act(() => result.current.sendAttachment(file, contentKey))
+
+      expect(sendVideo).toHaveBeenCalledTimes(1)
+      expect(sendPhoto).not.toHaveBeenCalled()
+    })
+
+    it('rejects an oversize photo client-side without calling the API', async () => {
+      const result = await caughtUpHook()
+      const file = makeFile('huge.jpg', 'image/jpeg', 10 * 1024 * 1024 + 1)
+
+      await act(() => result.current.sendAttachment(file, contentKey))
+
+      expect(result.current.error).toMatch(/exceeds/)
+      expect(encrypt).not.toHaveBeenCalled()
+      expect(sendPhoto).not.toHaveBeenCalled()
+    })
+
+    it('rejects an oversize video client-side without calling the API', async () => {
+      const result = await caughtUpHook()
+      const file = makeFile('huge.mp4', 'video/mp4', 50 * 1024 * 1024 + 1)
+
+      await act(() => result.current.sendAttachment(file, contentKey))
+
+      expect(result.current.error).toMatch(/exceeds/)
+      expect(sendVideo).not.toHaveBeenCalled()
+    })
+
+    it('rejects an unsupported file type', async () => {
+      const result = await caughtUpHook()
+      const file = makeFile('doc.pdf', 'application/pdf', 1024)
+
+      await act(() => result.current.sendAttachment(file, contentKey))
+
+      expect(result.current.error).toMatch(/unsupported file type/)
+      expect(encrypt).not.toHaveBeenCalled()
+      expect(sendPhoto).not.toHaveBeenCalled()
+      expect(sendVideo).not.toHaveBeenCalled()
+    })
+
+    it('surfaces an error if encryption fails', async () => {
+      const result = await caughtUpHook()
+      vi.mocked(encrypt).mockRejectedValueOnce(new Error('encrypt failed'))
+      const file = makeFile('cat.jpg', 'image/jpeg', 1024)
+
+      await act(() => result.current.sendAttachment(file, contentKey))
+
+      expect(result.current.error).toBe('encrypt failed')
+      expect(sendPhoto).not.toHaveBeenCalled()
+    })
   })
 })
